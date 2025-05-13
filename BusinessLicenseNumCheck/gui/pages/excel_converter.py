@@ -5,7 +5,9 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QMessageBox, QFileDial
 from components.buttons import create_styled_button
 from components.text_field import StyledTextField
 from utils.config import load_settings, save_settings
+
 import pandas as pd
+from openpyxl import load_workbook
 
 
 if getattr(sys, 'frozen', False):
@@ -83,7 +85,13 @@ class ExcelConverterPage(QWidget):
 
         # 소스 파일은 헤더가 포함된 엑셀로 읽음 (원본 데이터의 열 제목이 첫 행에 있다고 가정)
         try:
-            source_df = pd.read_excel(input_file, header=0)
+            source_df = pd.read_excel(input_file, header=0, engine="openpyxl")
+        except ImportError as ie:
+            QMessageBox.critical(self, "오류",
+                "openpyxl 라이브러리가 설치되어 있지 않습니다.\n"
+                "터미널에서 `pip install openpyxl`을 실행해주세요.")
+            self.status_label.setText("openpyxl 미설치 오류")
+            return
         except Exception as e:
             self.status_label.setText(f"소스 파일 읽기 오류: {str(e)}")
             QMessageBox.critical(self, "오류", f"소스 파일 읽기 중 오류 발생: {str(e)}")
@@ -181,8 +189,27 @@ class ExcelConverterPage(QWidget):
             else:
                 print("Telegram 설정이 env 파일에 없습니다.")
 
+        # 스타일 유지하며 엑셀 파일에 업데이트 내용 반영
         try:
-            target_df.to_excel(target_file, index=False)
+            wb = load_workbook(target_file)
+            ws = wb.active
+            header = [cell.value for cell in ws[1]]
+            col_idx = {col: idx+1 for idx, col in enumerate(header)}
+            # source_df 기준으로 워크시트 업데이트
+            for _, src_row in source_df.iterrows():
+                key_val = str(src_row[primary_key])
+                for excel_row in ws.iter_rows(min_row=2):
+                    if str(excel_row[col_idx[primary_key]-1].value) == key_val:
+                        for src_col, tgt_col in mapping.items():
+                            if tgt_col in col_idx:
+                                ws.cell(row=excel_row[0].row, column=col_idx[tgt_col], value=src_row[src_col])
+                        break
+                else:
+                    new_row_idx = ws.max_row + 1
+                    for src_col, tgt_col in mapping.items():
+                        if tgt_col in col_idx:
+                            ws.cell(row=new_row_idx, column=col_idx[tgt_col], value=src_row[src_col])
+            wb.save(target_file)
             self.status_label.setText(f"성공적으로 업데이트됨: {target_file}")
             QMessageBox.information(self, "완료", "변환 및 업데이트가 완료되었습니다.")
         except Exception as e:
