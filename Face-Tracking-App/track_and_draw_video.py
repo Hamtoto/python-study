@@ -191,3 +191,8 @@ if __name__ == "__main__":
         vc.close(); ac.close()
     shutil.rmtree("temp_proc")
     print(f"전체 완료 출력:{os.path.abspath(args.output_path)} 소요:{time.time()-start:.2f}s")
+
+# --------------------------------------------------
+# Face-Tracking-App: 비디오에서 얼굴을 추적하고 크롭하여 요약본을 생성하는 스크립트
+# python track_and_draw_video.py [input_file_path] [output_file_path]
+# --------------------------------------------------
