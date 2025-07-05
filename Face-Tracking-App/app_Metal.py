@@ -151,17 +151,19 @@ def crop_and_mux(input_path, output_path, backend='retinaface'):
     print(f"✅ Done. Processed {frame_idx} frames, saved to '{output_path}'")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python tmp.py <input_video> [<output_video>]")
-        sys.exit(1)
-
-    input_path = sys.argv[1]
-    if len(sys.argv) >= 3:
-        output_path = sys.argv[2]
-    else:
-        base = os.path.basename(input_path)
-        stem, _ = os.path.splitext(base)
-        os.makedirs("videos/output", exist_ok=True)
-        output_path = os.path.join("videos/output", f"{stem}_face.mp4")
-
-    crop_and_mux(input_path, output_path)
+    # batch process all videos in ./input, save to ./output
+    # determine base directory of this script
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    input_dir = os.path.join(base_dir, "videos", "input")
+    output_dir = os.path.join(base_dir, "videos", "output")
+    
+    os.makedirs(output_dir, exist_ok=True)
+    video_extensions = (".mp4", ".mov", ".avi", ".mkv")
+    for filename in os.listdir(input_dir):
+        if not filename.lower().endswith(video_extensions):
+            continue
+        input_path = os.path.join(input_dir, filename)
+        stem, ext = os.path.splitext(filename)
+        output_path = os.path.join(output_dir, f"{stem}_face{ext}")
+        print(f"Processing '{input_path}' -> '{output_path}'")
+        crop_and_mux(input_path, output_path)
