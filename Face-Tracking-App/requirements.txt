@@ -1,0 +1,35 @@
+# 얼굴 인식 및 분석
+# app_Metal 사용시 설치
+# deepface>=0.0.79
+
+# 이미지/비디오 처리 
+# CUDA 빌드후 설치
+# opencv-python>=4.9.0.80
+
+# 수치 계산
+numpy>=1.24.0
+
+# 다운로드 진행 표시
+tqdm>=4.66.0
+
+# YouTube 다운로드
+yt-dlp>=2025.6.24
+
+# HTTP 요청
+requests>=2.31.0
+
+# 환경변수 로드 (.env)
+python-dotenv>=1.0.0
+
+# 웹 서버 (API용)
+flask>=2.3.0
+
+# OpenAI API 연동
+openai>=1.30.0
+
+torch>=1.10
+facenet-pytorch>=2.5.2
+moviepy>=2.0
+Pillow>=8.0
+numpy>=1.20
+tqdm>=4.60
