@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+# 현재 폴더에서 아래 코드 실행 
+# source ..venv/bin/activate
 
 import os
 import sys
