@@ -8,3 +8,4 @@ dist/
 .venv
 *.mp4
 *deb
+*.wav
