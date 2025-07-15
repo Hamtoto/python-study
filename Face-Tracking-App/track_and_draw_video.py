@@ -15,6 +15,66 @@ from facenet_pytorch import InceptionResnetV1
 import torch.nn.functional as F
 from torchvision import transforms
 
+class ModelManager:
+    """모델 싱글톤 매니저 - 모델 재생성 방지로 성능 향상"""
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls, device=None):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def __init__(self, device=None):
+        if not self._initialized:
+            if device is None:
+                device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+            self.device = device
+            print(f"ModelManager 초기화: {device}")
+            self.mtcnn = MTCNN(keep_all=True, device=device, post_process=False)
+            self.resnet = InceptionResnetV1(pretrained='vggface2').eval().to(device)
+            
+            # GPU 메모리 풀 초기화
+            self._init_memory_pool()
+            self._initialized = True
+    
+    def _init_memory_pool(self):
+        """GPU 메모리 풀 사전 할당"""
+        if self.device.type == 'cuda':
+            # 배치 텐서 풀 (배치 크기 256 기준)
+            self.tensor_pool_256 = torch.zeros(256, 3, 224, 224, device=self.device)
+            # 단일 얼굴 임베딩용 텐서 풀
+            self.face_tensor_pool = torch.zeros(1, 3, 160, 160, device=self.device)
+            # 변환 객체 사전 생성
+            self.to_tensor = transforms.ToTensor()
+            print(f"GPU 메모리 풀 초기화 완료: {self.device}")
+    
+    def get_mtcnn(self):
+        return self.mtcnn
+    
+    def get_resnet(self):
+        return self.resnet
+    
+    def get_tensor_pool(self, batch_size=256):
+        """사전 할당된 텐서 풀 반환"""
+        if self.device.type == 'cuda':
+            if batch_size <= 256:
+                return self.tensor_pool_256[:batch_size]
+            else:
+                # 더 큰 배치 사이즈면 동적 할당
+                return torch.zeros(batch_size, 3, 224, 224, device=self.device)
+        return None
+    
+    def get_face_tensor_pool(self):
+        """얼굴 임베딩용 텐서 풀 반환"""
+        if self.device.type == 'cuda':
+            return self.face_tensor_pool
+        return None
+    
+    def get_transform(self):
+        """사전 생성된 변환 객체 반환"""
+        return self.to_tensor
+
 def get_voice_segments(video_path: str, sample_rate=16000, frame_duration=30):
     wav_path = video_path.replace('.mp4', '_audio.wav')
     AudioFileClip(video_path).write_audiofile(wav_path, fps=sample_rate, nbytes=2, codec='pcm_s16le')
@@ -42,8 +102,9 @@ def generate_id_timeline(video_path: str, device: torch.device):
     """
     Generate a list of track_ids (or None) for each frame of the input video.
     """
-    mtcnn = MTCNN(keep_all=True, device=device, post_process=False)
-    resnet = InceptionResnetV1(pretrained='vggface2').eval().to(device)
+    model_manager = ModelManager(device)
+    mtcnn = model_manager.get_mtcnn()
+    resnet = model_manager.get_resnet()
     prev_embs = {}
     next_id = 1
 
@@ -65,7 +126,13 @@ def generate_id_timeline(video_path: str, device: torch.device):
         if boxes is not None and boxes[0] is not None and len(boxes[0]) > 0:
             x1, y1, x2, y2 = boxes[0][0]
             face_crop_pil = face_img.crop((x1, y1, x2, y2)).resize((160, 160))
-            emb = resnet(transforms.ToTensor()(face_crop_pil).unsqueeze(0).to(device))
+            # 메모리 풀 사용으로 텐서 할당 최적화
+            face_tensor = model_manager.get_face_tensor_pool()
+            if face_tensor is not None:
+                face_tensor[0] = model_manager.get_transform()(face_crop_pil)
+                emb = resnet(face_tensor)
+            else:
+                emb = resnet(transforms.ToTensor()(face_crop_pil).unsqueeze(0).to(device))
             sims = {tid: F.cosine_similarity(emb, e, dim=1).item() for tid, e in prev_embs.items()}
             if sims and max(sims.values()) > 0.8:
                 track_id = max(sims, key=sims.get)
@@ -132,7 +199,8 @@ def trim_by_face_timeline(input_path: str, id_timeline: list, fps: float, thresh
 # --- 1단계: 얼굴 탐지 및 타임라인 생성 ---
 def analyze_video_faces(video_path: str, batch_size: int, device: torch.device) -> tuple[list[bool], float]:
     print("## 1단계: 얼굴 탐지 분석 시작")
-    mtcnn = MTCNN(keep_all=True, device=device, post_process=False)
+    model_manager = ModelManager(device)
+    mtcnn = model_manager.get_mtcnn()
     cap = cv2.VideoCapture(video_path)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -194,7 +262,7 @@ def create_condensed_video(video_path: str, output_path: str, timeline: list[boo
 def track_and_crop_video(
     video_path : str,
     output_path : str,
-    batch_size : int = 16,
+    batch_size : int = 256,
     crop_size : int = 250,
     jump_thresh : float = 25.0,
     ema_alpha : float = 0.2,
@@ -202,10 +270,11 @@ def track_and_crop_video(
     ) :
     print("## 3단계: 크롭 시작 (스무딩·이상치·하이브리드·클램핑)")
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    mtcnn = MTCNN(keep_all=True, device=device, post_process=False)
+    model_manager = ModelManager(device)
+    mtcnn = model_manager.get_mtcnn()
 
     # initialize embedding-based ID tracker
-    resnet = InceptionResnetV1(pretrained='vggface2').eval().to(device)
+    resnet = model_manager.get_resnet()
     prev_embs = {}
     next_id = 1
 
@@ -244,7 +313,13 @@ def track_and_crop_video(
                 # ── embedding and ID assignment on reinit frames
                 face_crop_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))\
                                   .crop((x1, y1, x2, y2)).resize((160, 160))
-                emb = resnet(transforms.ToTensor()(face_crop_pil).unsqueeze(0).to(device))
+                # 메모리 풀 사용으로 텐서 할당 최적화
+                face_tensor = model_manager.get_face_tensor_pool()
+                if face_tensor is not None:
+                    face_tensor[0] = model_manager.get_transform()(face_crop_pil)
+                    emb = resnet(face_tensor)
+                else:
+                    emb = resnet(transforms.ToTensor()(face_crop_pil).unsqueeze(0).to(device))
                 sims = {tid: F.cosine_similarity(emb, e, dim=1).item()
                         for tid, e in prev_embs.items()}
                 if sims and max(sims.values()) > 0.8:
@@ -274,7 +349,13 @@ def track_and_crop_video(
                     # after fallback detection, reassign ID as above
                     face_crop_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))\
                                       .crop((x1, y1, x2, y2)).resize((160, 160))
-                    emb = resnet(transforms.ToTensor()(face_crop_pil).unsqueeze(0).to(device))
+                    # 메모리 풀 사용으로 텐서 할당 최적화
+                    face_tensor = model_manager.get_face_tensor_pool()
+                    if face_tensor is not None:
+                        face_tensor[0] = model_manager.get_transform()(face_crop_pil)
+                        emb = resnet(face_tensor)
+                    else:
+                        emb = resnet(transforms.ToTensor()(face_crop_pil).unsqueeze(0).to(device))
                     sims = {tid: F.cosine_similarity(emb, e, dim=1).item()
                             for tid, e in prev_embs.items()}
                     if sims and max(sims.values()) > 0.8:
@@ -361,7 +442,7 @@ if __name__ == "__main__":
         # 0) 오디오 VAD로 말하는 구간 추출
         voice_timeline = get_voice_segments(input_path)
         # 1) 얼굴 감지 타임라인
-        timeline, fps = analyze_video_faces(input_path, batch_size=16, device=device)
+        timeline, fps = analyze_video_faces(input_path, batch_size=256, device=device)
         # 2) 요약본 생성
         if create_condensed_video(input_path, condensed, timeline, fps):
             print("요약본 완료")
@@ -412,8 +493,3 @@ if __name__ == "__main__":
         print(f"## 완료: {fname}")
 
     print("모든 비디오 처리 및 세그먼트별 얼굴 크롭/동기화 완료")
-
-# --------------------------------------------------
-# Face-Tracking-App: 비디오에서 얼굴을 추적하고 크롭하여 요약본을 생성하는 스크립트
-# python track_and_draw_video.py [input_file_path] [output_file_path]
-# --------------------------------------------------
