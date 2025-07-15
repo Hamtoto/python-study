@@ -1,7 +1,6 @@
 import cv2
 import torch
 import os
-import argparse
 import time
 import shutil
 from PIL import Image
@@ -14,8 +13,7 @@ import webrtcvad
 from facenet_pytorch import InceptionResnetV1
 import torch.nn.functional as F
 from torchvision import transforms
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
+from collections import OrderedDict
 
 class TrackerMonitor:
     """트래커 성능 모니터링 클래스"""
@@ -32,6 +30,75 @@ class TrackerMonitor:
         if not self.success_history:
             return 0.0
         return sum(self.success_history) / len(self.success_history)
+
+class SmartEmbeddingManager:
+    """LRU 캐시 + 시간 기반 정리를 조합한 임베딩 관리자"""
+    def __init__(self, max_size=15, ttl_seconds=30):
+        self.embeddings = OrderedDict()
+        self.last_used = {}
+        self.access_count = {}
+        self.max_size = max_size
+        self.ttl_seconds = ttl_seconds
+        
+    def cleanup_old_embeddings(self):
+        """TTL 기반 오래된 임베딩 정리"""
+        current_time = time.time()
+        expired_ids = []
+        
+        for track_id, last_time in self.last_used.items():
+            if current_time - last_time > self.ttl_seconds:
+                expired_ids.append(track_id)
+        
+        for track_id in expired_ids:
+            del self.embeddings[track_id]
+            del self.last_used[track_id]
+            del self.access_count[track_id]
+            print(f"  만료된 ID 정리: {track_id}")
+    
+    def get_embedding(self, track_id):
+        """임베딩 조회 (LRU 업데이트)"""
+        if track_id in self.embeddings:
+            # 최근 사용으로 이동
+            self.embeddings.move_to_end(track_id)
+            self.last_used[track_id] = time.time()
+            self.access_count[track_id] = self.access_count.get(track_id, 0) + 1
+            return self.embeddings[track_id]
+        return None
+    
+    def add_embedding(self, track_id, emb):
+        """임베딩 추가 (크기 제한 + TTL 정리)"""
+        # 주기적 정리
+        self.cleanup_old_embeddings()
+        
+        if track_id in self.embeddings:
+            # 기존 ID 업데이트
+            self.embeddings.move_to_end(track_id)
+        else:
+            # 새 ID 추가
+            if len(self.embeddings) >= self.max_size:
+                # 가장 오래된 것 제거 (LRU)
+                oldest_id = next(iter(self.embeddings))
+                del self.embeddings[oldest_id]
+                del self.last_used[oldest_id]
+                del self.access_count[oldest_id]
+                print(f"  LRU 정리: {oldest_id}")
+        
+        # 새 임베딩 추가
+        self.embeddings[track_id] = emb
+        self.last_used[track_id] = time.time()
+        self.access_count[track_id] = self.access_count.get(track_id, 0) + 1
+    
+    def get_all_embeddings(self):
+        """모든 임베딩 반환 (유사도 계산용)"""
+        return dict(self.embeddings)
+    
+    def get_stats(self):
+        """통계 정보 반환"""
+        return {
+            'count': len(self.embeddings),
+            'ids': list(self.embeddings.keys()),
+            'access_counts': dict(self.access_count)
+        }
 
 def get_adaptive_reinit_interval(success_rate, base_interval=40):
     """성공률에 따른 적응적 재초기화 간격 계산"""
@@ -187,12 +254,11 @@ def generate_id_timeline(video_path: str, device: torch.device, batch_size: int 
     model_manager = ModelManager(device)
     mtcnn = model_manager.get_mtcnn()
     resnet = model_manager.get_resnet()
-    prev_embs = {}
+    emb_manager = SmartEmbeddingManager(max_size=15, ttl_seconds=30)
     next_id = 1
 
     cap = cv2.VideoCapture(video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    from tqdm import tqdm
     pbar = tqdm(total=total_frames, desc="[ID 타임라인 생성 - 배치 처리]")
     fps = cap.get(cv2.CAP_PROP_FPS)
     id_timeline = []
@@ -210,8 +276,11 @@ def generate_id_timeline(video_path: str, device: torch.device, batch_size: int 
         
         # 배치가 찼거나 마지막 프레임이면 처리
         if len(frames_buffer) == batch_size or frame_count == total_frames:
+            # 배치 BGR→RGB 변환 (중복 제거)
+            rgb_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2RGB) for f in frames_buffer]
+            pil_images = [Image.fromarray(rgb_frame) for rgb_frame in rgb_frames]
+            
             # 배치 얼굴 탐지
-            pil_images = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in frames_buffer]
             boxes_list, _ = mtcnn.detect(pil_images)
             
             # 각 프레임별 ID 할당
@@ -219,6 +288,7 @@ def generate_id_timeline(video_path: str, device: torch.device, batch_size: int 
                 track_id = None
                 if boxes is not None and len(boxes) > 0:
                     x1, y1, x2, y2 = boxes[0]
+                    # 이미 변환된 PIL 객체 재사용
                     face_img = pil_images[i]
                     face_crop_pil = face_img.crop((x1, y1, x2, y2)).resize((160, 160))
                     
@@ -231,14 +301,15 @@ def generate_id_timeline(video_path: str, device: torch.device, batch_size: int 
                     else:
                         emb = resnet(transforms.ToTensor()(face_crop_pil).unsqueeze(0).to(device))
                     
-                    # ID 할당
-                    sims = {tid: F.cosine_similarity(emb, e, dim=1).item() for tid, e in prev_embs.items()}
+                    # ID 할당 (최적화된 유사도 계산)
+                    all_embs = emb_manager.get_all_embeddings()
+                    sims = {tid: F.cosine_similarity(emb, e, dim=1).item() for tid, e in all_embs.items()}
                     if sims and max(sims.values()) > 0.8:
                         track_id = max(sims, key=sims.get)
                     else:
                         track_id = next_id
                         next_id += 1
-                    prev_embs[track_id] = emb
+                    emb_manager.add_embedding(track_id, emb)
                 
                 id_timeline.append(track_id)
                 pbar.update(1)
@@ -320,13 +391,15 @@ def analyze_video_faces(video_path: str, batch_size: int, device: torch.device) 
             buffer.append(frame)
             pbar.update(1)
             if len(buffer) == batch_size or pbar.n == frame_count:
-                # 최적화된 배치 변환 사용
-                pil_images = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in buffer]
+                # 배치 BGR→RGB 변환 최적화
+                rgb_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2RGB) for f in buffer]
+                pil_images = [Image.fromarray(rgb_frame) for rgb_frame in rgb_frames]
                 boxes_list, _ = mtcnn.detect(pil_images)
                 face_detected_timeline.extend(b is not None for b in boxes_list)
                 buffer.clear()
     if buffer:
-        pil_images = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in buffer]
+        rgb_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2RGB) for f in buffer]
+        pil_images = [Image.fromarray(rgb_frame) for rgb_frame in rgb_frames]
         boxes_list, _ = mtcnn.detect(pil_images)
         face_detected_timeline.extend(b is not None for b in boxes_list)
     cap.release()
@@ -371,7 +444,6 @@ def create_condensed_video(video_path: str, output_path: str, timeline: list[boo
 def track_and_crop_video(
     video_path : str,
     output_path : str,
-    batch_size : int = 256,
     crop_size : int = 250,
     jump_thresh : float = 25.0,
     ema_alpha : float = 0.2,
@@ -384,7 +456,7 @@ def track_and_crop_video(
 
     # initialize embedding-based ID tracker
     resnet = model_manager.get_resnet()
-    prev_embs = {}
+    emb_manager = SmartEmbeddingManager(max_size=15, ttl_seconds=30)
     next_id = 1
 
     cap = cv2.VideoCapture(video_path)
@@ -443,8 +515,12 @@ def track_and_crop_video(
         )
         
         if need_reinit:
-            # MTCNN 얼굴 탐지 실행
-            boxes_list, _ = mtcnn.detect([Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))])
+            # BGR→RGB 변환 1번만 실행 (중복 제거)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb_frame)
+            
+            # MTCNN 얼굴 탐지 실행 (변환된 PIL 객체 재사용)
+            boxes_list, _ = mtcnn.detect([pil_image])
             faces = boxes_list[0]
             if faces is not None and len(faces) > 0:
                 x1, y1, x2, y2 = faces[0]
@@ -453,9 +529,8 @@ def track_and_crop_video(
                 raw_cx = int((x1 + x2) / 2)
                 raw_cy = int((y1 + y2) / 2)
                 
-                # ResNet 임베딩 계산 (재초기화 시에만)
-                face_crop_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))\
-                                  .crop((x1, y1, x2, y2)).resize((160, 160))
+                # ResNet 임베딩 계산 (같은 PIL 객체 재사용)
+                face_crop_pil = pil_image.crop((x1, y1, x2, y2)).resize((160, 160))
                 face_tensor = model_manager.get_face_tensor_pool()
                 if face_tensor is not None:
                     face_array = np.array(face_crop_pil)
@@ -464,18 +539,20 @@ def track_and_crop_video(
                 else:
                     emb = resnet(transforms.ToTensor()(face_crop_pil).unsqueeze(0).to(device))
                 
-                # ID 할당
+                # ID 할당 (최적화된 유사도 계산)
+                all_embs = emb_manager.get_all_embeddings()
                 sims = {tid: F.cosine_similarity(emb, e, dim=1).item()
-                        for tid, e in prev_embs.items()}
+                        for tid, e in all_embs.items()}
                 if sims and max(sims.values()) > 0.8:
                     track_id = max(sims, key=sims.get)
                 else:
                     track_id = next_id; next_id += 1
-                prev_embs[track_id] = emb
+                emb_manager.add_embedding(track_id, emb)
                 
                 # 재초기화 완료
                 frames_since_reinit = 0
-                print(f"  재초기화 완료 (성공률: {success_rate:.2f}, 간격: {current_reinit_interval})")
+                stats = emb_manager.get_stats()
+                print(f"  재초기화 완료 (성공률: {success_rate:.2f}, 간격: {current_reinit_interval}, ID수: {stats['count']})")
             else:
                 raw_cx, raw_cy = w // 2, h // 2
                 track_id = None
@@ -530,41 +607,6 @@ def slice_video(input_path: str, output_folder: str, segment_length: int = 10):
         output_path = os.path.join(output_folder, segment_filename)
         segment.write_videofile(output_path, codec='libx264', audio_codec='aac')
     clip.close()
-
-def process_single_segment(seg_info):
-    """단일 세그먼트 처리 함수 (병렬 처리용)"""
-    seg_fname, segment_temp_folder, temp_dir, final_segment_folder = seg_info
-    
-    try:
-        seg_input = os.path.join(segment_temp_folder, seg_fname)
-        seg_cropped = os.path.join(temp_dir, f"crop_{seg_fname}")
-        
-        # 얼굴 크롭 처리
-        track_and_crop_video(seg_input, seg_cropped)
-        
-        # 오디오 동기화 및 병합
-        vc = VideoFileClip(seg_cropped)
-        ac = AudioFileClip(seg_input)
-        final_seg = vc.with_audio(ac)
-        
-        output_seg_path = os.path.join(final_segment_folder, seg_fname)
-        # I/O 최적화: 더 빠른 인코딩 설정
-        final_seg.write_videofile(output_seg_path, codec='libx264', audio_codec='aac',
-                                 preset='ultrafast', ffmpeg_params=['-crf', '23'])
-        
-        # 즉시 정리 (스트리밍 파일 정리)
-        vc.close()
-        ac.close()
-        final_seg.close()
-        
-        # 임시 파일 즉시 삭제
-        if os.path.exists(seg_cropped):
-            os.remove(seg_cropped)
-            
-        return f"✅ {seg_fname} 처리 완료"
-        
-    except Exception as e:
-        return f"❌ {seg_fname} 처리 실패: {str(e)}"
 
 
 if __name__ == "__main__":
