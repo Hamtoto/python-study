@@ -7,8 +7,8 @@ import torch
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 # 배치 처리 설정
-BATCH_SIZE_ANALYZE = 256
-BATCH_SIZE_ID_TIMELINE = 128
+BATCH_SIZE_ANALYZE = 1024
+BATCH_SIZE_ID_TIMELINE = 512
 
 # 임베딩 관리자 설정
 EMBEDDING_MAX_SIZE = 15
@@ -18,7 +18,7 @@ EMBEDDING_TTL_SECONDS = 30
 TRACKER_MONITOR_WINDOW_SIZE = 20
 
 # 유사도 계산 설정
-SIMILARITY_THRESHOLD = 0.8
+SIMILARITY_THRESHOLD = 0.6
 
 # 비디오 처리 설정
 CROP_SIZE = 250
@@ -32,11 +32,14 @@ MAX_ASPECT_RATIO = 2.0
 MIN_ASPECT_RATIO = 0.5
 
 # 트리밍 설정
-FACE_DETECTION_THRESHOLD_FRAMES = 30
-CUT_THRESHOLD_SECONDS = 2.0
+FACE_DETECTION_THRESHOLD_FRAMES = 90
+CUT_THRESHOLD_SECONDS = 5.0
 
 # 세그먼트 설정
 SEGMENT_LENGTH_SECONDS = 10
+
+# 트래킹 모드 설정
+TRACKING_MODE = "most_frequent"  # "first_person" | "most_frequent"
 
 # 오디오 처리 설정
 AUDIO_SAMPLE_RATE = 16000

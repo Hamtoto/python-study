@@ -1,11 +1,18 @@
 """
 얼굴 탐지 및 분석 모듈
 """
+import os
 import cv2
+import torch
+import numpy as np
 from PIL import Image
 from tqdm import tqdm
 from core.model_manager import ModelManager
 from config import DEVICE, BATCH_SIZE_ANALYZE
+
+# OpenCV 최적화 플래그 설정
+os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'hwaccel;auto'
+os.environ['OPENCV_VIDEOIO_PRIORITY_MSMF'] = '0'
 
 
 def analyze_video_faces(video_path: str, batch_size: int = BATCH_SIZE_ANALYZE, device=DEVICE) -> tuple[list[bool], float]:
@@ -24,6 +31,10 @@ def analyze_video_faces(video_path: str, batch_size: int = BATCH_SIZE_ANALYZE, d
     model_manager = ModelManager(device)
     mtcnn = model_manager.get_mtcnn()
     cap = cv2.VideoCapture(video_path)
+    
+    # OpenCV 최적화 설정
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # 버퍼 크기 최소화
+    
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
     face_detected_timeline = []
@@ -38,17 +49,18 @@ def analyze_video_faces(video_path: str, batch_size: int = BATCH_SIZE_ANALYZE, d
             buffer.append(frame)
             pbar.update(1)
             if len(buffer) == batch_size or pbar.n == frame_count:
-                # 배치 BGR→RGB 변환 최적화
+                # PIL 변환 제거 - numpy 배열 직접 사용
                 rgb_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2RGB) for f in buffer]
-                pil_images = [Image.fromarray(rgb_frame) for rgb_frame in rgb_frames]
-                boxes_list, _ = mtcnn.detect(pil_images)
+                
+                # MTCNN에 numpy 배열 리스트 전달 (PIL 건너뛰기)
+                boxes_list, _ = mtcnn.detect(rgb_frames)
                 face_detected_timeline.extend(b is not None for b in boxes_list)
                 buffer.clear()
     
     if buffer:
+        # 남은 버퍼도 numpy 배열 직접 사용
         rgb_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2RGB) for f in buffer]
-        pil_images = [Image.fromarray(rgb_frame) for rgb_frame in rgb_frames]
-        boxes_list, _ = mtcnn.detect(pil_images)
+        boxes_list, _ = mtcnn.detect(rgb_frames)
         face_detected_timeline.extend(b is not None for b in boxes_list)
     
     cap.release()

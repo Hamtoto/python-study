@@ -4,17 +4,68 @@
 import os
 import time
 import shutil
+import warnings
+from multiprocessing import Pool, cpu_count, set_start_method
 from moviepy import VideoFileClip, AudioFileClip
+
+# pkg_resources 경고 억제
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
+
+# CUDA 메모리 최적화 설정
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 from utils.audio_utils import get_voice_segments
 from processors.face_analyzer import analyze_video_faces
 from processors.id_timeline_generator import generate_id_timeline
 from processors.video_trimmer import create_condensed_video, trim_by_face_timeline, slice_video
 from processors.video_tracker import track_and_crop_video
+from processors.target_selector import TargetSelector
+from utils.logger import error_logger
 from config import (
     DEVICE, INPUT_DIR, OUTPUT_ROOT, TEMP_ROOT, 
     SUPPORTED_VIDEO_EXTENSIONS, BATCH_SIZE_ANALYZE, 
-    BATCH_SIZE_ID_TIMELINE, VIDEO_CODEC, AUDIO_CODEC
+    BATCH_SIZE_ID_TIMELINE, VIDEO_CODEC, AUDIO_CODEC, TRACKING_MODE
 )
+
+
+def process_single_segment(task_data):
+    """
+    단일 세그먼트 처리 함수 (멀티프로세싱용)
+    
+    Args:
+        task_data: 세그먼트 처리에 필요한 데이터 딕셔너리
+    """
+    try:
+        seg_fname = task_data['seg_fname']
+        seg_input = task_data['seg_input']
+        seg_cropped = task_data['seg_cropped']
+        output_path = task_data['output_path']
+        
+        print(f"  처리 중: {seg_fname}")
+        
+        # 1) 얼굴 크롭
+        track_and_crop_video(seg_input, seg_cropped)
+        
+        # 2) 오디오 동기화
+        vc = VideoFileClip(seg_cropped)
+        ac = AudioFileClip(seg_input)
+        final_seg = vc.with_audio(ac)
+        
+        # 3) 최종 파일 생성
+        final_seg.write_videofile(output_path, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC)
+        
+        # 4) 정리
+        vc.close()
+        ac.close()
+        final_seg.close()
+        if os.path.exists(seg_cropped):
+            os.remove(seg_cropped)
+            
+        print(f"  완료: {seg_fname}")
+        
+    except Exception as e:
+        error_msg = str(e)
+        print(f"  오류: {seg_fname} - {error_msg}")
+        error_logger.log_segment_error(seg_fname, error_msg)
 
 
 def process_single_video(fname: str):
@@ -53,8 +104,18 @@ def process_single_video(fname: str):
             id_timeline, fps2 = generate_id_timeline(condensed, DEVICE, batch_size=BATCH_SIZE_ID_TIMELINE)
             print(f"## 디버그: trimming 전 condensed 영상 프레임 수 예측 = {len(id_timeline)}")
             
-            # 자동 타겟 ID: 첫 등장 인물
-            target_id = next((tid for tid in id_timeline if tid is not None), None)
+            # 모드별 타겟 ID 선택 (임베딩 정보 포함)
+            from core.embedding_manager import SmartEmbeddingManager
+            emb_manager = SmartEmbeddingManager()
+            embeddings = emb_manager.get_all_embeddings()
+            
+            target_id = TargetSelector.select_target(id_timeline, TRACKING_MODE, embeddings)
+            if target_id is not None:
+                stats = TargetSelector.get_target_stats(id_timeline, target_id)
+                print(f"## 타겟 선택 완료: ID={target_id}, 모드={TRACKING_MODE}")
+                print(f"## 타겟 통계: {stats['target_frames']}/{stats['total_frames']} 프레임 ({stats['coverage_ratio']:.2%})")
+            else:
+                print(f"## 경고: 타겟을 찾을 수 없습니다 (모드={TRACKING_MODE})")
             
             # 타겟 아닌 프레임은 None으로 표시
             if target_id is not None:
@@ -80,35 +141,37 @@ def process_single_video(fname: str):
                            if f.lower().endswith(".mp4")]
             segment_files.sort()  # 순서 보장
             
-            print(f"## 세그먼트 순차 처리 시작: {len(segment_files)}개 파일")
+            print(f"## 세그먼트 병렬 처리 시작: {len(segment_files)}개 파일")
             
+            # 멀티프로세싱을 위한 작업 데이터 준비
+            segment_tasks = []
             for seg_fname in segment_files:
                 seg_input = os.path.join(segment_temp_folder, seg_fname)
                 seg_cropped = os.path.join(temp_dir, f"crop_{seg_fname}")
-                
-                print(f"  처리 중: {seg_fname}")
-                track_and_crop_video(seg_input, seg_cropped)
-                
-                vc = VideoFileClip(seg_cropped)
-                ac = AudioFileClip(seg_input)
-                final_seg = vc.with_audio(ac)
-                
                 output_seg_path = os.path.join(final_segment_folder, seg_fname)
-                final_seg.write_videofile(output_seg_path, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC)
                 
-                # 즉시 정리
-                vc.close()
-                ac.close()
-                final_seg.close()
-                if os.path.exists(seg_cropped):
-                    os.remove(seg_cropped)
+                segment_tasks.append({
+                    'seg_fname': seg_fname,
+                    'seg_input': seg_input,
+                    'seg_cropped': seg_cropped,
+                    'output_path': output_seg_path
+                })
+            
+            # GPU 메모리 고려하여 프로세스 수 조정 (GPU 메모리 부족 방지)
+            num_processes = max(1, min(6, int(cpu_count() * 0.75)))
+            print(f"## 병렬 처리 프로세스 수: {num_processes}")
+            
+            with Pool(processes=num_processes) as pool:
+                pool.map(process_single_segment, segment_tasks)
                     
-            print(f"## 세그먼트 순차 처리 완료")
+            print(f"## 세그먼트 병렬 처리 완료")
         else:
             print(f"요약본 생성 실패: {fname}")
 
     except Exception as e:
-        print(f"비디오 처리 중 오류 발생: {fname} - {str(e)}")
+        error_msg = str(e)
+        print(f"비디오 처리 중 오류 발생: {fname} - {error_msg}")
+        error_logger.log_video_error(fname, error_msg)
     finally:
         elapsed = time.time() - start_time
         print(f"{fname} 처리시간 : {int(elapsed)}초")
@@ -123,8 +186,19 @@ def process_all_videos():
     """
     입력 디렉토리의 모든 비디오 파일 처리
     """
+    # CUDA 멀티프로세싱을 위한 spawn 방식 설정
+    try:
+        set_start_method('spawn', force=True)
+    except RuntimeError:
+        # 이미 설정된 경우 무시
+        pass
+    
     os.makedirs(OUTPUT_ROOT, exist_ok=True)
     os.makedirs(TEMP_ROOT, exist_ok=True)
+
+    # 에러 로그 초기화
+    error_logger.clear_log()
+    print(f"## 에러 로그 파일: {error_logger.log_file}")
 
     for fname in os.listdir(INPUT_DIR):
         if not fname.lower().endswith(SUPPORTED_VIDEO_EXTENSIONS):

@@ -8,7 +8,7 @@ import cv2
 from PIL import Image
 from facenet_pytorch import MTCNN, InceptionResnetV1
 from torchvision import transforms
-from config import DEVICE
+from config import DEVICE, BATCH_SIZE_ANALYZE
 
 
 class ModelManager:
@@ -27,7 +27,13 @@ class ModelManager:
                 device = DEVICE
             self.device = device
             print(f"ModelManager 초기화: {device}")
-            self.mtcnn = MTCNN(keep_all=True, device=device, post_process=False)
+            self.mtcnn = MTCNN(
+                keep_all=True, 
+                device=device, 
+                post_process=False,
+                min_face_size=20,  # 기본값 20 -> 더 작은 얼굴 감지
+                thresholds=[0.6, 0.7, 0.7]  # 기본값보다 낮춤 (더 관대한 탐지)
+            )
             self.resnet = InceptionResnetV1(pretrained='vggface2').eval().to(device)
             
             # GPU 메모리 풀 초기화
@@ -37,13 +43,13 @@ class ModelManager:
     def _init_memory_pool(self):
         """GPU 메모리 풀 사전 할당"""
         if self.device.type == 'cuda':
-            # 배치 텐서 풀 (배치 크기 256 기준)
-            self.tensor_pool_256 = torch.zeros(256, 3, 224, 224, device=self.device)
+            # 배치 텐서 풀 (config 배치 크기 기준)
+            self.tensor_pool = torch.zeros(BATCH_SIZE_ANALYZE, 3, 224, 224, device=self.device)
             # 단일 얼굴 임베딩용 텐서 풀
             self.face_tensor_pool = torch.zeros(1, 3, 160, 160, device=self.device)
             # 변환 객체 사전 생성
             self.to_tensor = transforms.ToTensor()
-            print(f"GPU 메모리 풀 초기화 완료: {self.device}")
+            print(f"GPU 메모리 풀 초기화 완료: {self.device}, 배치크기: {BATCH_SIZE_ANALYZE}")
     
     def get_mtcnn(self):
         return self.mtcnn
@@ -51,11 +57,11 @@ class ModelManager:
     def get_resnet(self):
         return self.resnet
     
-    def get_tensor_pool(self, batch_size=256):
+    def get_tensor_pool(self, batch_size=BATCH_SIZE_ANALYZE):
         """사전 할당된 텐서 풀 반환"""
         if self.device.type == 'cuda':
-            if batch_size <= 256:
-                return self.tensor_pool_256[:batch_size]
+            if batch_size <= BATCH_SIZE_ANALYZE:
+                return self.tensor_pool[:batch_size]
             else:
                 # 더 큰 배치 사이즈면 동적 할당
                 return torch.zeros(batch_size, 3, 224, 224, device=self.device)
