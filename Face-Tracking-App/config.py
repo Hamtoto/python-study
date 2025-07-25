@@ -7,8 +7,8 @@ import torch
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 # 배치 처리 설정
-BATCH_SIZE_ANALYZE = 1024
-BATCH_SIZE_ID_TIMELINE = 512
+BATCH_SIZE_ANALYZE = 256  # GPU 메모리 안전을 위해 축소
+BATCH_SIZE_ID_TIMELINE = 128  # GPU 메모리 안전을 위해 축소
 
 # 임베딩 관리자 설정
 EMBEDDING_MAX_SIZE = 15
