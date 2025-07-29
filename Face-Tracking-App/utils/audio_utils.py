@@ -1,116 +1,121 @@
 """
-오디오 처리 유틸리티 함수들 - FFmpeg 최대 성능 최적화
+최적화된 오디오 처리 유틸리티 - FFmpeg 및 멀티프로세싱 활용
 """
-import wave
+import os
 import subprocess
-import webrtcvad
-import multiprocessing
-import re
-from moviepy import AudioFileClip
+import tempfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from utils.exceptions import FFmpegError
 from config import AUDIO_SAMPLE_RATE, AUDIO_FRAME_DURATION
 
 
-def get_optimal_cpu_threads():
-    """동적 CPU 스레드 수 계산 (전체 코어 - 1)"""
-    total_cores = multiprocessing.cpu_count()
-    optimal_threads = max(1, total_cores - 1)  # 최소 1개, 최대 전체-1
-    print(f"🖥️ CPU 최적화: {total_cores}코어 중 {optimal_threads}개 사용")
-    return optimal_threads
-
-
-def get_voice_segments(video_path: str, sample_rate=AUDIO_SAMPLE_RATE, frame_duration=AUDIO_FRAME_DURATION):
+def get_voice_segments_ffmpeg(audio_path: str, threshold_db: int = -30, min_silence_duration: float = 0.5):
     """
-    비디오에서 음성 구간을 추출하는 함수
+    FFmpeg의 silencedetect 필터를 사용한 고속 음성 구간 검출
     
     Args:
-        video_path: 비디오 파일 경로
-        sample_rate: 오디오 샘플 레이트
-        frame_duration: 프레임 지속시간 (ms)
+        audio_path: 오디오 파일 경로
+        threshold_db: 침묵으로 간주할 데시벨 임계값
+        min_silence_duration: 최소 침묵 지속 시간 (초)
     
     Returns:
-        list: (시작시간, 종료시간) 튜플들의 리스트
+        list[tuple[float, float]]: 음성 구간 (시작, 끝) 리스트
     """
-    wav_path = video_path.replace('.mp4', '_audio.wav')
-    
-    # 동적 CPU 스레드 수 적용
-    threads = get_optimal_cpu_threads()
-    
-    # FFmpeg 최대 성능 명령어 (실시간 출력)
-    ffmpeg_cmd = [
-        'ffmpeg', '-y', 
-        '-threads', str(threads),  # 동적 CPU 스레드
-        '-i', video_path, 
-        '-ar', str(sample_rate), 
-        '-ac', '1',  # 모노
-        '-sample_fmt', 's16',
-        '-progress', 'pipe:1',  # 실시간 진행률
-        wav_path
+    cmd = [
+        'ffmpeg', '-i', audio_path,
+        '-af', f'silencedetect=n={threshold_db}dB:d={min_silence_duration}',
+        '-f', 'null', '-'
     ]
     
     try:
-        print(f"🚀 FFmpeg 최대 성능 오디오 추출 시작 ({threads}스레드)")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        stderr_output = result.stderr
         
-        # 실시간 출력으로 무한 대기 방지
-        process = subprocess.Popen(
-            ffmpeg_cmd, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            universal_newlines=True
-        )
+        silence_starts = [float(line.split(' ')[-1]) for line in stderr_output.splitlines() if 'silence_start' in line]
+        silence_ends = [float(line.split(' ')[-1]) for line in stderr_output.splitlines() if 'silence_end' in line]
         
-        # 실시간 진행률 파싱
-        while True:
-            line = process.stdout.readline()
-            if not line:
-                break
-            if 'time=' in line:
-                # 진행률 표시 (선택적)
-                time_match = re.search(r'time=(\d+:\d+:\d+\.\d+)', line)
-                if time_match:
-                    print(f"⏳ 처리 중: {time_match.group(1)}", end='\r')
+        duration_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audio_path]
+        duration_result = subprocess.run(duration_cmd, capture_output=True, text=True, check=True)
+        duration = float(duration_result.stdout.strip())
         
-        # 프로세스 완료 대기
-        return_code = process.wait()
-        if return_code == 0:
-            print("\n🎯 FFmpeg 최대 성능 오디오 추출 완료!")
-        else:
-            raise subprocess.CalledProcessError(return_code, ffmpeg_cmd)
+        voice_segments = []
+        last_silence_end = 0.0
+        
+        for start, end in zip(silence_starts, silence_ends):
+            if start > last_silence_end:
+                voice_segments.append((last_silence_end, start))
+            last_silence_end = end
             
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
-        # Fallback to MoviePy
-        print(f"\n⚠️ FFmpeg 실패 ({e}), MoviePy fallback으로 오디오 추출")
-        AudioFileClip(video_path).write_audiofile(wav_path, fps=sample_rate, nbytes=2, codec='pcm_s16le')
-    vad = webrtcvad.Vad(3)
-    wf = wave.open(wav_path, 'rb')
-    frames = wf.readframes(wf.getnframes())
-    segment_length = int(sample_rate * frame_duration / 1000) * 2
-    voice_times = []
-    is_speech = False
-    t = 0.0
-    for offset in range(0, len(frames), segment_length):
-        chunk = frames[offset:offset+segment_length]
+        if last_silence_end < duration:
+            voice_segments.append((last_silence_end, duration))
+            
+        return voice_segments
         
-        # WebRTC VAD는 정확한 청크 길이를 요구함 (10ms, 20ms, 30ms)
-        if len(chunk) != segment_length:
-            # 마지막 청크가 불완전한 경우 패딩 또는 스킵
-            if len(chunk) < segment_length // 2:  # 절반 미만이면 스킵
-                break
-            # 절반 이상이면 0으로 패딩
-            chunk = chunk + b'\x00' * (segment_length - len(chunk))
+    except (subprocess.CalledProcessError, ValueError) as e:
+        raise FFmpegError(command=cmd, stderr=getattr(e, 'stderr', ''))
+
+def extract_audio_segment(args):
+    """멀티프로세싱을 위한 오디오 세그먼트 추출 함수"""
+    video_path, segment, temp_dir = args
+    start, end = segment
+    
+    temp_audio_path = os.path.join(temp_dir, f"temp_audio_{start}_{end}.wav")
+    
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', video_path,
+        '-ss', str(start),
+        '-to', str(end),
+        '-vn',
+        '-acodec', 'pcm_s16le',
+        '-ar', str(AUDIO_SAMPLE_RATE),
+        '-ac', '1',
+        temp_audio_path
+    ]
+    
+    try:
+        subprocess.run(cmd, capture_output=True, check=True)
+        return temp_audio_path
+    except subprocess.CalledProcessError as e:
+        print(f"오디오 세그먼트 추출 실패: {os.path.basename(video_path)} ({start}-{end}), Stderr: {e.stderr}")
+        return None
+
+def get_voice_segments_parallel(video_path: str, num_workers: int = 4):
+    """
+    멀티프로세싱을 활용한 병렬 음성 구간 검출
+    """
+    print("## 1단계: 병렬 음성 구간(VAD) 분석 시작")
+    
+    try:
+        cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        duration = float(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError) as e:
+        raise FFmpegError(command=cmd, stderr=getattr(e, 'stderr', ''))
+
+    chunk_size = duration / num_workers
+    segments = [(i * chunk_size, (i + 1) * chunk_size) for i in range(num_workers)]
+    
+    with tempfile.TemporaryDirectory() as temp_dir:
+        tasks = [(video_path, seg, temp_dir) for seg in segments]
         
-        try:
-            speech = vad.is_speech(chunk, sample_rate)
-        except Exception as e:
-            print(f"⚠️ VAD 프레임 스킵: {len(chunk)} bytes, 오류: {e}")
-            speech = False  # 오류 시 음성 아님으로 처리
-        if speech and not is_speech:
-            start = t; is_speech = True
-        if not speech and is_speech:
-            voice_times.append((start, t)); is_speech = False
-        t += frame_duration / 1000
-    if is_speech:
-        voice_times.append((start, t))
-    wf.close()
-    return voice_times
+        all_voice_segments = []
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            future_to_segment = {executor.submit(extract_audio_segment, task): task for task in tasks}
+            
+            for future in as_completed(future_to_segment):
+                audio_chunk_path = future.result()
+                if audio_chunk_path:
+                    chunk_voice_segments = get_voice_segments_ffmpeg(audio_chunk_path)
+                    original_start_time = future_to_segment[future][1][0]
+                    for start, end in chunk_voice_segments:
+                        all_voice_segments.append((start + original_start_time, end + original_start_time))
+                    
+                    os.remove(audio_chunk_path)
+        
+        all_voice_segments.sort()
+        return all_voice_segments
+
+def get_voice_segments(video_path: str):
+    num_workers = max(1, os.cpu_count() // 2)
+    return get_voice_segments_parallel(video_path, num_workers=num_workers)

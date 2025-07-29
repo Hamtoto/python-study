@@ -65,7 +65,7 @@ def create_condensed_video_ffmpeg(video_path: str, output_path: str, timeline: l
     video_inputs = "".join([f"[v{i}]" for i in range(len(clips))])
     audio_inputs = "".join([f"[a{i}]" for i in range(len(clips))])
     
-    filter_complex = ";".join(filter_parts) + f";{video_inputs}concat=n={len(clips)}:v=1:a=0[vout];{audio_inputs}concat=n={len(clips)}:v=0:a=1[aout]"
+    filter_complex = f"{';'.join(filter_parts)};{video_inputs}concat=n={len(clips)}:v=1:a=0[vout];{audio_inputs}concat=n={len(clips)}:v=0:a=1[aout]"
     
     # FFmpeg 명령어 실행
     cmd = [
@@ -87,9 +87,7 @@ def create_condensed_video_ffmpeg(video_path: str, output_path: str, timeline: l
         print("FFmpeg 요약본 완료")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"FFmpeg 오류: {e}")
-        print(f"stderr: {e.stderr}")
-        return False
+        raise FFmpegError(command=cmd, stderr=e.stderr)
 
 
 def trim_by_face_timeline_ffmpeg(input_path: str, id_timeline: list, fps: float, 
@@ -212,7 +210,7 @@ def _ffmpeg_trim_segments(input_path, output_path, segments):
         video_inputs = "".join([f"[v{i}]" for i in range(len(segments))])
         audio_inputs = "".join([f"[a{i}]" for i in range(len(segments))])
         
-        filter_complex = ";".join(filter_parts) + f";{video_inputs}concat=n={len(segments)}:v=1:a=0[vout];{audio_inputs}concat=n={len(segments)}:v=0:a=1[aout]"
+        filter_complex = f"{';'.join(filter_parts)};{video_inputs}concat=n={len(segments)}:v=1:a=0[vout];{audio_inputs}concat=n={len(segments)}:v=0:a=1[aout]"
         
         cmd = [
             'ffmpeg', '-y',
@@ -230,8 +228,7 @@ def _ffmpeg_trim_segments(input_path, output_path, segments):
         subprocess.run(cmd, capture_output=True, check=True)
         return True
     except subprocess.CalledProcessError as e:
-        print(f"FFmpeg 세그먼트 트리밍 오류: {e}")
-        return False
+        raise FFmpegError(command=cmd, stderr=e.stderr)
 
 
 # 하위 호환성을 위한 함수명 유지
