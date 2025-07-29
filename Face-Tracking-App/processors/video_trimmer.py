@@ -1,9 +1,20 @@
 """
-비디오 트리밍 모듈
+비디오 트리밍 모듈 - FFmpeg 최대 성능 최적화
 """
 import os
+import subprocess
+import tempfile
+import multiprocessing
+import re
 from moviepy import VideoFileClip, concatenate_videoclips
 from config import CUT_THRESHOLD_SECONDS, FACE_DETECTION_THRESHOLD_FRAMES, VIDEO_CODEC, AUDIO_CODEC, SEGMENT_LENGTH_SECONDS
+
+
+def get_optimal_cpu_threads():
+    """동적 CPU 스레드 수 계산 (전체 코어 - 1)"""
+    total_cores = multiprocessing.cpu_count()
+    optimal_threads = max(1, total_cores - 1)
+    return optimal_threads
 
 
 def create_condensed_video(video_path: str, output_path: str, timeline: list[bool], fps: float, cut_threshold: float = CUT_THRESHOLD_SECONDS) -> bool:
@@ -48,14 +59,120 @@ def create_condensed_video(video_path: str, output_path: str, timeline: list[boo
         print("오류: 유지할 클립 없음")
         return False
     
-    print("MoviePy 요약본 생성 중…")
-    original = VideoFileClip(video_path)
-    subclips = [original.subclipped(s, e) for s, e in clips]
-    summary = concatenate_videoclips(subclips)
-    summary.write_videofile(output_path, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, 
-                           temp_audiofile='temp-audio.m4a', remove_temp=True)
-    original.close()
-    print("요약본 완료")
+    # 동적 CPU 최적화
+    threads = get_optimal_cpu_threads()
+    print(f"🚀 FFmpeg 최대 성능 요약본 생성 ({threads}스레드)...")
+    
+    # FFmpeg filter_complex 생성 (MoviePy 대신 직접 호출)
+    filter_parts = []
+    for i, (start, end) in enumerate(clips):
+        filter_parts.append(f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{i}]")
+        filter_parts.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{i}]")
+    
+    # concat 필터
+    video_inputs = "".join(f"[v{i}]" for i in range(len(clips)))
+    audio_inputs = "".join(f"[a{i}]" for i in range(len(clips)))
+    concat_filter = f"{video_inputs}{audio_inputs}concat=n={len(clips)}:v=1:a=1[outv][outa]"
+    
+    filter_complex = ";".join(filter_parts + [concat_filter])
+    
+    # filter_complex가 너무 긴 경우 임시 파일 사용
+    import tempfile
+    filter_file = None
+    
+    if len(filter_complex) > 8000:  # 명령어 길이 제한 대비
+        # 클립 수가 너무 많으면 MoviePy로 직접 처리
+        print(f"⚠️ 클립 수 너무 많음 ({len(clips)}개), MoviePy 직접 사용")
+        original = VideoFileClip(video_path)
+        video_duration = original.duration
+        
+        # 안전한 클립 생성
+        safe_clips = []
+        for s, e in clips:
+            if e >= video_duration:
+                e = video_duration - 0.001
+            safe_clips.append((s, e))
+        
+        subclips = [original.subclipped(s, e) for s, e in safe_clips]
+        summary = concatenate_videoclips(subclips)
+        summary.write_videofile(output_path, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, 
+                               temp_audiofile='temp-audio.m4a', remove_temp=True)
+        original.close()
+        for clip in subclips:
+            clip.close()
+        summary.close()
+        print("🎯 MoviePy 대용량 처리 완료")
+        return True
+    else:
+        # 기존 방식 (짧은 경우)
+        ffmpeg_cmd = [
+            'ffmpeg', '-y', 
+            '-threads', str(threads),
+            '-i', video_path,
+            '-filter_complex', filter_complex,
+            '-map', '[outv]', '-map', '[outa]',
+            '-c:v', 'libx264', '-c:a', 'aac',
+            '-preset', 'fast',
+            '-progress', 'pipe:1',
+            output_path
+        ]
+    
+    try:
+        # 실시간 출력으로 무한 대기 방지
+        process = subprocess.Popen(
+            ffmpeg_cmd, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        
+        # 실시간 진행률 파싱
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                break
+            if 'time=' in line:
+                time_match = re.search(r'time=(\d+:\d+:\d+\.\d+)', line)
+                if time_match:
+                    print(f"⏳ 요약본 생성: {time_match.group(1)}", end='\r')
+        
+        # 프로세스 완료 대기
+        return_code = process.wait()
+        if return_code == 0:
+            print("\n🎯 FFmpeg 최대 성능 요약본 완료!")
+        else:
+            raise subprocess.CalledProcessError(return_code, ffmpeg_cmd)
+            
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+        print(f"FFmpeg 오류: {e}")
+        # Fallback to MoviePy
+        print("⚠️ MoviePy fallback 사용")
+        original = VideoFileClip(video_path)
+        video_duration = original.duration
+        
+        # end_time이 video duration과 같거나 큰 경우 조정
+        safe_clips = []
+        for s, e in clips:
+            if e >= video_duration:
+                e = video_duration - 0.001  # 1ms 여유
+                print(f"⚠️ 클립 끝시간 조정: {e:.3f} -> {video_duration - 0.001:.3f}")
+            safe_clips.append((s, e))
+        
+        subclips = [original.subclipped(s, e) for s, e in safe_clips]
+        summary = concatenate_videoclips(subclips)
+        summary.write_videofile(output_path, codec=VIDEO_CODEC, audio_codec=AUDIO_CODEC, 
+                               temp_audiofile='temp-audio.m4a', remove_temp=True)
+        original.close()
+        print("MoviePy fallback 완료")
+    finally:
+        # 임시 파일 정리
+        if filter_file:
+            try:
+                os.unlink(filter_file.name)
+            except:
+                pass
     return True
 
 

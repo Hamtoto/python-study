@@ -21,12 +21,21 @@ class ModelManager:
             cls._instance = super().__new__(cls)
         return cls._instance
     
-    def __init__(self, device=None):
+    def __init__(self, device=None, multiprocessing_mode=False):
         if not self._initialized:
             if device is None:
                 device = DEVICE
             self.device = device
-            print(f"ModelManager 초기화: {device}")
+            self.multiprocessing_mode = multiprocessing_mode
+            
+            # 멀티프로세싱 환경에서 메모리 절약 설정
+            if multiprocessing_mode:
+                batch_size = 32  # 멀티프로세싱시 더 작은 배치
+                print(f"ModelManager 초기화 (멀티프로세싱 메모리 절약 모드): {device}")
+            else:
+                batch_size = BATCH_SIZE_ANALYZE
+                print(f"ModelManager 초기화: {device}")
+                
             self.mtcnn = MTCNN(
                 keep_all=True, 
                 device=device, 
@@ -39,6 +48,8 @@ class ModelManager:
             # GPU 메모리 풀 초기화
             self._init_memory_pool()
             self._initialized = True
+    
+            self.batch_size = batch_size  # 배치 크기 저장
     
     def _init_memory_pool(self):
         """GPU 메모리 풀 사전 할당"""

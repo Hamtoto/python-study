@@ -19,17 +19,19 @@ os.environ['OPENCV_VIDEOIO_PRIORITY_MSMF'] = '0'
 
 
 def calculate_optimal_batch_size(frame_queue, gpu_memory_usage=None):
-    """Queue 깊이 기반 동적 배치 크기 계산 - GPU 메모리 안전"""
+    """Queue 깊이 기반 동적 배치 크기 계산 - 6시간 영상 최적화"""
     try:
         queue_depth = frame_queue.qsize()
-        if queue_depth > 256:  # 충분한 프레임 대기 중
-            return 256  # 중간 배치로 제한 (메모리 안전)
-        elif queue_depth > 128:
-            return 128  # 작은 배치
+        if queue_depth > 512:  # 큐가 절반 이상 찼을 때 (1024의 50%)
+            return 256  # 최대 배치 (GPU 메모리 안전)
+        elif queue_depth > 256:  # 큐가 1/4 이상 찼을 때
+            return 128  # 중간 배치
+        elif queue_depth > 128:  # 큐에 일정량 쌓일 때
+            return 64   # 작은 배치
         else:
-            return 64  # 최소 배치 (빠른 시작)
+            return 32   # 최소 배치 (빠른 시작, GPU 유휴 방지)
     except:
-        return 64  # 기본값 (안전)
+        return 32  # 기본값 (안전)
 
 
 def analyze_video_faces(video_path: str, batch_size: int = BATCH_SIZE_ANALYZE, device=DEVICE) -> tuple[list[bool], float]:
@@ -54,8 +56,8 @@ def analyze_video_faces(video_path: str, batch_size: int = BATCH_SIZE_ANALYZE, d
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
     
-    # Producer-Consumer 설정
-    frame_queue = Queue(maxsize=512)  # refactor.md 기준 큐 크기
+    # Producer-Consumer 설정 - 6시간 영상 처리를 위해 큐 크기 확대
+    frame_queue = Queue(maxsize=1024)  # 512→1024로 확대 (긴 영상 처리)
     face_detected_timeline = []
     timeline_lock = threading.Lock()
     producer_finished = threading.Event()
@@ -74,10 +76,11 @@ def analyze_video_faces(video_path: str, batch_size: int = BATCH_SIZE_ANALYZE, d
                 
                 # OpenCV BGR → RGB 변환 (I/O 스레드에서 처리)
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame_queue.put(rgb_frame, timeout=5)
+                frame_queue.put(rgb_frame, timeout=30)  # 5→30초로 확대 (긴 영상 처리)
                 
         except Exception as e:
             print(f"Producer 오류: {e}")
+            print(f"프레임 처리 중단: 전체 {frame_count}프레임 중 일부만 처리됨")
         finally:
             cap.release()
             producer_finished.set()
@@ -97,7 +100,7 @@ def analyze_video_faces(video_path: str, batch_size: int = BATCH_SIZE_ANALYZE, d
                     # 프레임 수집
                     while len(buffer) < optimal_batch:
                         try:
-                            frame = frame_queue.get(timeout=0.1)
+                            frame = frame_queue.get(timeout=1.0)  # 0.1→1.0초로 증가
                             buffer.append(frame)
                         except Empty:
                             if producer_finished.is_set():

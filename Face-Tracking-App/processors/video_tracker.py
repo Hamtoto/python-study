@@ -22,6 +22,9 @@ from utils.similarity_utils import find_matching_id_with_best_fallback
 def track_and_crop_video(
     video_path: str,
     output_path: str,
+    mtcnn,
+    resnet,
+    device,
     crop_size: int = CROP_SIZE,
     jump_thresh: float = JUMP_THRESHOLD,
     ema_alpha: float = EMA_ALPHA,
@@ -33,18 +36,15 @@ def track_and_crop_video(
     Args:
         video_path: 입력 비디오 경로
         output_path: 출력 비디오 경로
+        mtcnn: 사전 로드된 MTCNN 모델
+        resnet: 사전 로드된 ResNet 모델
+        device: Torch 디바이스
         crop_size: 크롭 사이즈
         jump_thresh: 점프 임계값
         ema_alpha: EMA 스무딩 계수
         reinit_interval: 재초기화 간격
     """
-    print("## 3단계: 크롭 시작 (스무딩·이상치·하이브리드·클램핑)")
-    device = DEVICE
-    model_manager = ModelManager(device)
-    mtcnn = model_manager.get_mtcnn()
-
-    # initialize embedding-based ID tracker
-    resnet = model_manager.get_resnet()
+    # 모델을 인자로 받으므로, 더 이상 ModelManager를 직접 초기화하지 않음.
     emb_manager = SmartEmbeddingManager()
     next_id = 1
 
@@ -123,13 +123,7 @@ def track_and_crop_video(
                 
                 # ResNet 임베딩 계산 (같은 PIL 객체 재사용)
                 face_crop_pil = pil_image.crop((x1, y1, x2, y2)).resize((160, 160))
-                face_tensor = model_manager.get_face_tensor_pool()
-                if face_tensor is not None:
-                    face_array = np.array(face_crop_pil)
-                    face_tensor[0] = torch.from_numpy(face_array).permute(2, 0, 1).float() / 255.0
-                    emb = resnet(face_tensor)
-                else:
-                    emb = resnet(transforms.ToTensor()(face_crop_pil).unsqueeze(0).to(device))
+                emb = resnet(transforms.ToTensor()(face_crop_pil).unsqueeze(0).to(device))
                 
                 # ID 할당 (조기 종료 최적화된 유사도 계산)
                 all_embs = emb_manager.get_all_embeddings()

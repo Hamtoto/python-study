@@ -10,3 +10,12 @@ dist/
 *deb
 *.wav
 img/
+*m4a
+*.zip
+*.tar.gz
+*.rar
+*.7z
+*.tar
+*.gz
+*.log
+*.bak

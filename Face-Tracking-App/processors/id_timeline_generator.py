@@ -63,7 +63,7 @@ def generate_id_timeline(video_path: str, device=DEVICE, batch_size: int = BATCH
                 
                 # 프레임과 인덱스를 함께 큐에 전달 (순서 보존)
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame_queue.put((frame_index, rgb_frame), timeout=5)
+                frame_queue.put((frame_index, rgb_frame), timeout=30)  # 5→30초로 증가
                 frame_index += 1
                 
         except Exception as e:
@@ -87,7 +87,7 @@ def generate_id_timeline(video_path: str, device=DEVICE, batch_size: int = BATCH
                     # 배치 수집
                     while len(batch_buffer) < batch_size:
                         try:
-                            frame_data = frame_queue.get(timeout=0.1)
+                            frame_data = frame_queue.get(timeout=1.0)  # 0.1→1.0초로 증가
                             batch_buffer.append(frame_data)
                         except Empty:
                             if producer_finished.is_set():
@@ -166,8 +166,14 @@ def generate_id_timeline(video_path: str, device=DEVICE, batch_size: int = BATCH
         finally:
             # 결과를 순서대로 재조립
             with timeline_lock:
-                for i in range(total_frames):
-                    id_timeline.append(results_dict.get(i, None))
+                if results_dict:  # 결과가 있는 경우에만
+                    for i in range(total_frames):
+                        id_timeline.append(results_dict.get(i, None))
+                else:
+                    # 결과가 없으면 모든 프레임을 None으로 설정
+                    print("⚠️ 경고: 처리 결과가 없어 모든 프레임을 None으로 설정")
+                    for i in range(total_frames):
+                        id_timeline.append(None)
             
             print(f"⚡ Consumer 완료: {processed_frames}프레임 처리")
     

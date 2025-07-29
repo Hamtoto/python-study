@@ -42,8 +42,7 @@ def find_matching_id_early_exit(emb, all_embs, threshold=SIMILARITY_THRESHOLD):
 
 def find_matching_id_with_best_fallback(emb, all_embs, threshold=SIMILARITY_THRESHOLD):
     """
-    조기 종료 + 최고 유사도 반환 조합
-    임계값 이상이 없으면 최고 유사도 ID 반환 (기존 동작과 동일)
+    개선된 유사도 매칭: 임계값 이상 우선, 없으면 최고 유사도 선택
     
     Args:
         emb: 현재 얼굴 임베딩
@@ -71,5 +70,5 @@ def find_matching_id_with_best_fallback(emb, all_embs, threshold=SIMILARITY_THRE
             best_sim = sim
             best_id = tid
     
-    # 최고 유사도가 임계값 이상이면 반환, 아니면 None
+    # 원래 로직으로 복구: 임계값 이상만 같은 사람으로 인식
     return best_id if best_sim > threshold else None

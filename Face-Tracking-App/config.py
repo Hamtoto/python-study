@@ -11,14 +11,14 @@ BATCH_SIZE_ANALYZE = 256  # GPU 메모리 안전을 위해 축소
 BATCH_SIZE_ID_TIMELINE = 128  # GPU 메모리 안전을 위해 축소
 
 # 임베딩 관리자 설정
-EMBEDDING_MAX_SIZE = 15
-EMBEDDING_TTL_SECONDS = 30
+EMBEDDING_MAX_SIZE = 15  # 원래 설정으로 복구
+EMBEDDING_TTL_SECONDS = 30  # 원래 설정으로 복구
 
 # 트래커 모니터 설정
 TRACKER_MONITOR_WINDOW_SIZE = 20
 
 # 유사도 계산 설정
-SIMILARITY_THRESHOLD = 0.6
+SIMILARITY_THRESHOLD = 0.6  # 원래 설정으로 복구
 
 # 비디오 처리 설정
 CROP_SIZE = 250
