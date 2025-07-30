@@ -1,0 +1,42 @@
+# Face-Tracking-App 완전한 의존성 (protobuf 충돌 방지)
+
+# PyTorch 생태계 (CUDA 포함) - 별도 설치 명령어 사용
+# pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# torch>=2.0.0
+# torchvision>=0.15.0
+# torchaudio>=2.0.0
+
+# PyTorch 필수 의존성들
+filelock>=3.12.0
+fsspec>=2023.6.0
+jinja2>=3.1.0
+networkx>=3.0
+sympy>=1.11.0
+typing-extensions>=4.8.0
+
+# 얼굴 인식
+facenet-pytorch==2.6.0
+
+# 기본 라이브러리
+numpy>=1.24.0
+# opencv-python==4.8.1.78  # 사용자 빌드 .deb 파일로 설치: /home/hamtoto/work/python-study/Face-Tracking-App/.devcontainer/build_20250710-1_amd64.deb
+pillow>=10.0.0
+
+# 텍스트 처리 및 진행표시
+tqdm>=4.65.0
+
+# 오디오 처리
+webrtcvad==2.0.10
+
+# 시스템 모니터링
+psutil>=5.9.0
+
+# 개발/테스트
+pytest>=7.0.0
+
+# 네트워크
+requests>=2.31.0
+urllib3>=2.0.0
+certifi>=2023.0.0
+charset-normalizer>=3.0.0
+idna>=3.4
