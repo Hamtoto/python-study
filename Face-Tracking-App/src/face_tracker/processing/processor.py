@@ -249,6 +249,11 @@ def process_all_videos_optimized():
         process_single_video_optimized(fname)
 
     logger.success("모든 비디오 처리 완료")
+    
+    # 전체 임시 폴더 정리
+    if os.path.exists(TEMP_ROOT):
+        shutil.rmtree(TEMP_ROOT)
+        logger.info("임시 폴더 정리 완료")
 
 
 # 하위 호환성을 위한 함수명 유지
