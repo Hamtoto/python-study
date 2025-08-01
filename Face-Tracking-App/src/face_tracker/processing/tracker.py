@@ -50,13 +50,36 @@ def track_and_crop_video(
     next_id = 1
 
     cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        logger.error(f"비디오 파일 열기 실패: {video_path}")
+        return
+        
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    # FPS 유효성 검사 및 기본값 설정
+    if fps <= 0 or fps is None:
+        logger.warning(f"유효하지 않은 FPS ({fps}), 기본값 25.0 사용")
+        fps = 25.0
+    
+    # 비디오 속성 검증
+    if total_frames <= 0 or w <= 0 or h <= 0:
+        logger.error(f"유효하지 않은 비디오 속성: frames={total_frames}, w={w}, h={h}")
+        cap.release()
+        return
 
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    writer = cv2.VideoWriter(output_path, fourcc, fps, (crop_size, crop_size))
+    # AVI 컨테이너로 변경하여 호환성 향상
+    temp_output = output_path.replace('.mp4', '_temp.avi')
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    writer = cv2.VideoWriter(temp_output, fourcc, fps, (crop_size, crop_size))
+    
+    # VideoWriter 초기화 확인
+    if not writer.isOpened():
+        logger.error(f"VideoWriter 초기화 실패: {temp_output}")
+        cap.release()
+        return
 
     tracker = None
     prev_center = None
@@ -177,4 +200,27 @@ def track_and_crop_video(
     pbar.close()
     cap.release()
     writer.release()
-    logger.success(f"얼굴 크롭 완료: {output_path}")
+    
+    # AVI를 MP4로 변환
+    import subprocess
+    try:
+        convert_cmd = [
+            'ffmpeg', '-y', '-i', temp_output,
+            '-c:v', 'libx264', '-preset', 'fast',
+            output_path
+        ]
+        subprocess.run(convert_cmd, capture_output=True, check=True)
+        
+        # 임시 AVI 파일 삭제
+        import os
+        if os.path.exists(temp_output):
+            os.remove(temp_output)
+            
+        logger.success(f"얼굴 크롭 완료: {output_path}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"AVI->MP4 변환 실패: {output_path}")
+        # AVI 파일을 MP4로 이름만 변경
+        import os
+        if os.path.exists(temp_output):
+            os.rename(temp_output, output_path)
+        logger.warning(f"AVI 파일로 저장됨: {output_path}")

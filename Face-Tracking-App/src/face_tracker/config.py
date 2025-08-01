@@ -38,8 +38,8 @@ CUT_THRESHOLD_SECONDS = 5.0
 # 세그먼트 설정
 SEGMENT_LENGTH_SECONDS = 10
 
-# 트래킹 모드 설정
-TRACKING_MODE = "most_frequent"  # "first_person" | "most_frequent"
+# 트래킹 모드 설정 (모드별 config에서 오버라이드됨)
+TRACKING_MODE = "most_frequent"  # 기본값, single_config.py 또는 dual_config.py에서 설정
 
 # 오디오 처리 설정
 AUDIO_SAMPLE_RATE = 16000

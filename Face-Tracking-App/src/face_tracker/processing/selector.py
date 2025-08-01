@@ -123,3 +123,90 @@ class TargetSelector:
                 merged_timeline.append(merge_map.get(tid, tid))
                 
         return merged_timeline
+
+    @staticmethod
+    def select_dual_speakers(voice_segments, id_timeline, fps, embeddings=None):
+        """
+        DUAL 모드: 발화 구간별 상위 2명 화자 식별
+        
+        Args:
+            voice_segments: VAD로 추출한 음성 구간 [(start, end), ...]
+            id_timeline: 프레임별 face_id 리스트
+            fps: 영상 FPS
+            embeddings: 임베딩 정보 (선택사항)
+            
+        Returns:
+            {
+                'speaker_a': [(start, end, face_id), ...],
+                'speaker_b': [(start, end, face_id), ...]
+            }
+        """
+        if not voice_segments:
+            return {'speaker_a': [], 'speaker_b': []}
+            
+        # 임베딩 기반 ID 병합 (있는 경우) - 트래커 안정화를 위해 더 적극적으로 병합
+        if embeddings:
+            merged_timeline = TargetSelector._merge_similar_ids(id_timeline, embeddings, similarity_threshold=0.65)
+        else:
+            merged_timeline = id_timeline
+            
+        speakers = {'speaker_a': [], 'speaker_b': []}
+        
+        for start_time, end_time in voice_segments:
+            # 해당 발화 구간의 프레임 범위 계산
+            start_frame = int(start_time * fps)
+            end_frame = int(end_time * fps)
+            
+            # 범위 유효성 검사
+            if start_frame >= len(merged_timeline):
+                continue
+                
+            end_frame = min(end_frame, len(merged_timeline))
+            
+            # 구간 내 face_id별 등장 빈도 카운트
+            face_counts = {}
+            for frame_idx in range(start_frame, end_frame):
+                face_id = merged_timeline[frame_idx]
+                if face_id is not None:
+                    face_counts[face_id] = face_counts.get(face_id, 0) + 1
+            
+            if not face_counts:
+                continue  # 해당 구간에 얼굴이 없으면 건너뛰기
+                
+            # 상위 2명 선택 (빈도순 정렬)
+            sorted_faces = sorted(face_counts.items(), key=lambda x: x[1], reverse=True)
+            
+            # speaker_a (1순위)
+            if len(sorted_faces) >= 1:
+                top_face_id = sorted_faces[0][0]
+                speakers['speaker_a'].append((start_time, end_time, top_face_id))
+            
+            # speaker_b (2순위)
+            if len(sorted_faces) >= 2:
+                second_face_id = sorted_faces[1][0]
+                speakers['speaker_b'].append((start_time, end_time, second_face_id))
+        
+        return speakers
+    
+    @staticmethod
+    def get_dual_speaker_stats(speakers_timeline):
+        """
+        DUAL 모드 화자 통계 정보 반환
+        
+        Args:
+            speakers_timeline: select_dual_speakers의 반환값
+            
+        Returns:
+            dict: 화자별 통계 정보
+        """
+        stats = {}
+        
+        for speaker_name, segments in speakers_timeline.items():
+            total_duration = sum(end - start for start, end, _ in segments)
+            stats[speaker_name] = {
+                'segments_count': len(segments),
+                'total_duration': total_duration,
+                'face_ids': list(set(face_id for _, _, face_id in segments))
+            }
+        
+        return stats

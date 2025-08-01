@@ -55,8 +55,22 @@ def process_single_segment_ffmpeg(task_data):
         mtcnn = model_manager.get_mtcnn()
         resnet = model_manager.get_resnet()
         
-        # 2) 얼굴 크롭
+        # 2) 얼굴 크롭 (파일 존재 확인)
+        if not os.path.exists(seg_input):
+            logger.error(f"입력 파일 없음: {seg_input}")
+            return
+        
+        # 출력 디렉토리 생성 확인
+        seg_cropped_dir = os.path.dirname(seg_cropped)
+        os.makedirs(seg_cropped_dir, exist_ok=True)
+        logger.info(f"얼굴 크롭 시작: {seg_input} -> {seg_cropped}")
+            
         track_and_crop_video(seg_input, seg_cropped, mtcnn, resnet, DEVICE)
+        
+        # 크롭된 파일 생성 확인
+        if not os.path.exists(seg_cropped):
+            logger.error(f"얼굴 크롭 실패: {seg_fname} - 크롭된 파일 생성되지 않음")
+            return
         
         # 3) FFmpeg를 사용한 오디오 동기화 (MoviePy 대신)
         cmd = [
@@ -134,78 +148,91 @@ def process_single_video_optimized(fname: str):
             id_timeline, fps2 = generate_id_timeline(condensed, DEVICE, batch_size=BATCH_SIZE_ID_TIMELINE)
             reporter.end_stage("얼굴 인식", frames=len(id_timeline), batch_size=BATCH_SIZE_ID_TIMELINE)
             
-            # 모드별 타겟 ID 선택 (임베딩 정보 포함)
+            # 모드별 처리 분기
             from src.face_tracker.core.embeddings import SmartEmbeddingManager
             emb_manager = SmartEmbeddingManager()
             embeddings = emb_manager.get_all_embeddings()
             
-            target_id = TargetSelector.select_target(id_timeline, TRACKING_MODE, embeddings)
-            if target_id is not None:
-                stats = TargetSelector.get_target_stats(id_timeline, target_id)
-                logger.success(f"타겟 선택: ID={target_id} ({stats['coverage_ratio']:.1%} 커버리지)")
-            else:
-                logger.warning(f"타겟 찾기 실패 (모드={TRACKING_MODE})")
+            # 동적으로 업데이트된 TRACKING_MODE 값 가져오기
+            from src.face_tracker.config import TRACKING_MODE as current_mode
             
-            # 타겟 아닌 프레임은 None으로 표시
-            if target_id is not None:
-                id_timeline_bool = [tid if tid == target_id else None for tid in id_timeline]
-            else:
-                id_timeline_bool = id_timeline
-            
-            # FFmpeg를 사용한 고속 트리밍
-            reporter.start_stage("비디오 트리밍")
-            logger.stage("비디오 트리밍...")
-            if trim_by_face_timeline_ffmpeg(condensed, id_timeline_bool, fps2, threshold_frames=30, output_path=trimmed):
-                source_for_crop = trimmed
-            else:
-                source_for_crop = condensed
-            reporter.end_stage("비디오 트리밍")
-            
-            # 3) FFmpeg를 사용한 병렬 세그먼트 분할
-            reporter.start_stage("세그먼트 분할")
-            logger.stage("세그먼트 분할...")
-            segment_temp_folder = os.path.join(temp_dir, "segments")
-            os.makedirs(segment_temp_folder, exist_ok=True)
-            slice_video_parallel_ffmpeg(source_for_crop, segment_temp_folder, segment_length=10)
-            reporter.end_stage("세그먼트 분할")
-
-            # 4) 각 세그먼트별 얼굴 크롭 및 오디오 동기 병합 (병렬 처리)
-            reporter.start_stage("얼굴 크롭")
-            logger.stage("얼굴 크롭 및 오디오 동기화...")
-            final_segment_folder = os.path.join(OUTPUT_ROOT, basename)
-            os.makedirs(final_segment_folder, exist_ok=True)
-            
-            segment_files = [f for f in os.listdir(segment_temp_folder) 
-                           if f.lower().endswith(".mp4")]
-            segment_files.sort()  # 순서 보장
-            
-            logger.info(f"세그먼트 {len(segment_files)}개 병렬 처리 시작")
-            
-            # 멀티프로세싱을 위한 작업 데이터 준비
-            segment_tasks = []
-            for seg_fname in segment_files:
-                seg_input = os.path.join(segment_temp_folder, seg_fname)
-                seg_cropped = os.path.join(temp_dir, f"crop_{seg_fname}")
-                output_seg_path = os.path.join(final_segment_folder, seg_fname)
+            if current_mode == "dual":
+                # DUAL 모드 전용 처리 함수 호출
+                process_dual_mode_segments(
+                    id_timeline, fps2, condensed, 
+                    temp_dir, basename, reporter, len(timeline)
+                )
                 
-                segment_tasks.append({
-                    'seg_fname': seg_fname,
-                    'seg_input': seg_input,
-                    'seg_cropped': seg_cropped,
-                    'output_path': output_seg_path
-                })
+            else:
+                # SINGLE 모드: 기존 로직
+                target_id = TargetSelector.select_target(id_timeline, current_mode, embeddings)
+                if target_id is not None:
+                    stats = TargetSelector.get_target_stats(id_timeline, target_id)
+                    logger.success(f"타겟 선택: ID={target_id} ({stats['coverage_ratio']:.1%} 커버리지)")
+                else:
+                    logger.warning(f"타겟 찾기 실패 (모드={current_mode})")
+                
+                # 타겟 아닌 프레임은 None으로 표시
+                if target_id is not None:
+                    id_timeline_bool = [tid if tid == target_id else None for tid in id_timeline]
+                else:
+                    id_timeline_bool = id_timeline
             
-            # CPU 코어 기반 최적 프로세스 수 계산
-            num_processes = max(1, min(8, int(cpu_count() * 0.8)))
-            
-            # 성능 리포트에 정보 설정
-            reporter.set_processing_info(len(timeline), len(segment_files), num_processes)
-            
-            with Pool(processes=num_processes) as pool:
-                pool.map(process_single_segment_ffmpeg, segment_tasks)
+                # SINGLE 모드: 기존 트리밍 및 세그먼트 처리
+                # FFmpeg를 사용한 고속 트리밍
+                reporter.start_stage("비디오 트리밍")
+                logger.stage("비디오 트리밍...")
+                if trim_by_face_timeline_ffmpeg(condensed, id_timeline_bool, fps2, threshold_frames=30, output_path=trimmed):
+                    source_for_crop = trimmed
+                else:
+                    source_for_crop = condensed
+                reporter.end_stage("비디오 트리밍")
+                
+                # 3) FFmpeg를 사용한 병렬 세그먼트 분할
+                reporter.start_stage("세그먼트 분할")
+                logger.stage("세그먼트 분할...")
+                segment_temp_folder = os.path.join(temp_dir, "segments")
+                os.makedirs(segment_temp_folder, exist_ok=True)
+                slice_video_parallel_ffmpeg(source_for_crop, segment_temp_folder, segment_length=10)
+                reporter.end_stage("세그먼트 분할")
+
+                # 4) 각 세그먼트별 얼굴 크롭 및 오디오 동기 병합 (병렬 처리)
+                reporter.start_stage("얼굴 크롭")
+                logger.stage("얼굴 크롭 및 오디오 동기화...")
+                final_segment_folder = os.path.join(OUTPUT_ROOT, basename)
+                os.makedirs(final_segment_folder, exist_ok=True)
+                
+                segment_files = [f for f in os.listdir(segment_temp_folder) 
+                               if f.lower().endswith(".mp4")]
+                segment_files.sort()  # 순서 보장
+                
+                logger.info(f"세그먼트 {len(segment_files)}개 병렬 처리 시작")
+                
+                # 멀티프로세싱을 위한 작업 데이터 준비
+                segment_tasks = []
+                for seg_fname in segment_files:
+                    seg_input = os.path.join(segment_temp_folder, seg_fname)
+                    seg_cropped = os.path.join(temp_dir, f"crop_{seg_fname}")
+                    output_seg_path = os.path.join(final_segment_folder, seg_fname)
                     
-            reporter.end_stage("얼굴 크롭", segments=len(segment_files))
-            logger.success(f"세그먼트 병렬 처리 완료 ({len(segment_files)}개)")
+                    segment_tasks.append({
+                        'seg_fname': seg_fname,
+                        'seg_input': seg_input,
+                        'seg_cropped': seg_cropped,
+                        'output_path': output_seg_path
+                    })
+                
+                # CPU 코어 기반 최적 프로세스 수 계산
+                num_processes = max(1, min(8, int(cpu_count() * 0.8)))
+                
+                # 성능 리포트에 정보 설정
+                reporter.set_processing_info(len(timeline), len(segment_files), num_processes)
+                
+                with Pool(processes=num_processes) as pool:
+                    pool.map(process_single_segment_ffmpeg, segment_tasks)
+                        
+                reporter.end_stage("얼굴 크롭", segments=len(segment_files))
+                logger.success(f"세그먼트 병렬 처리 완료 ({len(segment_files)}개)")
         else:
             logger.error(f"요약본 생성 실패: {fname}")
 
@@ -222,6 +249,104 @@ def process_single_video_optimized(fname: str):
         # 임시 디렉토리 정리
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
+
+def process_dual_mode_segments(id_timeline, fps, source_video, temp_dir, basename, reporter, total_frames):
+    """
+    DUAL 모드 전용: 상위 2명의 화자에 대해 각각 10초 단위 세그먼트 생성
+    
+    Args:
+        id_timeline: 얼굴 ID 타임라인
+        fps: 비디오 FPS
+        source_video: 소스 비디오 경로 (요약본)
+        temp_dir: 임시 디렉토리
+        basename: 베이스 파일명
+        reporter: 성능 리포터
+    """
+    from src.face_tracker.dual_config import DUAL_PERSON_FOLDER_PREFIX
+    from collections import Counter
+
+    reporter.start_stage("DUAL 모드 처리")
+    logger.stage("DUAL 모드: 상위 2명 화자별 10초 세그먼트 생성...")
+
+    # 1. 전체 타임라인에서 상위 2명 face_id 추출
+    valid_ids = [fid for fid in id_timeline if fid is not None]
+    if not valid_ids:
+        logger.warning("DUAL 모드: 인식된 얼굴이 없습니다.")
+        reporter.end_stage("DUAL 모드 처리", segments=0)
+        return
+
+    face_id_counts = Counter(valid_ids)
+    top_2_faces = face_id_counts.most_common(2)
+
+    logger.info(f"DUAL 모드: 상위 {len(top_2_faces)}명 화자 선택됨")
+    total_segments_processed = 0
+
+    # 2. 각 화자에 대해 SINGLE 모드와 동일한 로직 수행
+    for i, (target_id, count) in enumerate(top_2_faces, 1):
+        person_folder_name = f"{DUAL_PERSON_FOLDER_PREFIX}{i}"
+        logger.info(f"{person_folder_name} (face_id={target_id}, 등장 프레임={count}) 처리 시작")
+
+        # 2a. 해당 화자의 타임라인 생성
+        target_timeline_bool = [tid if tid == target_id else None for tid in id_timeline]
+        
+        # 2b. 해당 화자 영상만 트리밍
+        person_trimmed_path = os.path.join(temp_dir, f"trimmed_{person_folder_name}.mp4")
+        if not trim_by_face_timeline_ffmpeg(source_video, target_timeline_bool, fps, threshold_frames=30, output_path=person_trimmed_path):
+            logger.warning(f"{person_folder_name}: 트리밍할 영상이 없어 건너뜁니다.")
+            continue
+
+        # 2c. 10초 단위로 세그먼트 분할
+        person_segment_temp_folder = os.path.join(temp_dir, f"segments_{person_folder_name}")
+        os.makedirs(person_segment_temp_folder, exist_ok=True)
+        slice_video_parallel_ffmpeg(person_trimmed_path, person_segment_temp_folder, segment_length=10)
+
+        # 2d. 각 세그먼트 크롭 및 저장
+        final_person_output_dir = os.path.join(OUTPUT_ROOT, basename, person_folder_name)
+        os.makedirs(final_person_output_dir, exist_ok=True)
+
+        segment_files = [f for f in os.listdir(person_segment_temp_folder) if f.lower().endswith(".mp4")]
+        segment_files.sort()
+
+        if not segment_files:
+            logger.warning(f"{person_folder_name}: 생성된 세그먼트가 없습니다.")
+            continue
+
+        logger.info(f"{person_folder_name}: {len(segment_files)}개 세그먼트 처리 시작")
+
+        segment_tasks = []
+        for seg_fname in segment_files:
+            # 출력 파일명에 person_folder_name을 포함하여 구분
+            output_seg_fname = f"{person_folder_name}_{seg_fname}"
+            seg_input = os.path.join(person_segment_temp_folder, seg_fname)
+            seg_cropped = os.path.join(temp_dir, f"crop_{output_seg_fname}")
+            output_seg_path = os.path.join(final_person_output_dir, output_seg_fname)
+
+            segment_tasks.append({
+                'seg_fname': output_seg_fname,
+                'seg_input': seg_input,
+                'seg_cropped': seg_cropped,
+                'output_path': output_seg_path
+            })
+        
+        # 순차 처리
+        for task in segment_tasks:
+            process_single_segment_ffmpeg(task)
+        
+        logger.success(f"{person_folder_name}: {len(segment_tasks)}개 세그먼트 처리 완료")
+        total_segments_processed += len(segment_tasks)
+
+        # 임시 폴더 정리
+        if os.path.exists(person_segment_temp_folder):
+            shutil.rmtree(person_segment_temp_folder)
+        if os.path.exists(person_trimmed_path):
+            os.remove(person_trimmed_path)
+
+    # 최종 리포트 정보 업데이트
+    num_processes = max(1, min(8, int(cpu_count() * 0.8)))
+    reporter.set_processing_info(total_frames, total_segments_processed, num_processes)
+
+    reporter.end_stage("DUAL 모드 처리", segments=total_segments_processed)
+    logger.success(f"DUAL 모드 전체 처리 완료: 총 {total_segments_processed}개 세그먼트, {len(top_2_faces)}명 인식")
 
 
 def process_all_videos_optimized():
