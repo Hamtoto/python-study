@@ -279,6 +279,19 @@ tail -f videos/output/detailed.log
 3. Early exit optimization for similarity calculations
 4. Advanced caching for embeddings and computations
 
+**Face Recognition Improvements**:
+1. **L2 Normalization Implementation (Priority: High)**
+   - Add L2 normalization before cosine similarity calculation
+   - Location: `src/face_tracker/utils/similarity.py`
+   - Expected impact: Improved accuracy in lighting/angle variations
+   - Implementation: `torch.nn.functional.normalize(embedding, p=2, dim=1)`
+2. **Euclidean Distance Alternative**
+   - Alternative distance metric for face comparison
+   - May provide better performance for specific data characteristics
+3. **SVM Classifier (Long-term)**
+   - Machine learning approach for same/different person classification
+   - Requires dataset preparation and model training pipeline
+
 **Operational Improvements**:
 1. Real-time monitoring dashboard (Flask/FastAPI)
 2. Async pipeline for entire workflow
