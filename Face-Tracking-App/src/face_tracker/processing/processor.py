@@ -268,8 +268,26 @@ def process_dual_mode_segments(id_timeline, fps, source_video, temp_dir, basenam
     reporter.start_stage("DUAL 모드 처리")
     logger.stage("DUAL 모드: 상위 2명 화자별 10초 세그먼트 생성...")
 
-    # 1. 전체 타임라인에서 상위 2명 face_id 추출
-    valid_ids = [fid for fid in id_timeline if fid is not None]
+    # 1. L2 정규화를 사용한 ID 병합으로 상위 2명 face_id 추출
+    from src.face_tracker.core.embeddings import SmartEmbeddingManager
+    from src.face_tracker.processing.selector import TargetSelector
+    from src.face_tracker.config import L2_NORMALIZATION_ENABLED
+    
+    emb_manager = SmartEmbeddingManager()
+    embeddings = emb_manager.get_all_embeddings()
+    
+    # L2 정규화 적용된 ID 병합
+    if embeddings:
+        merged_timeline = TargetSelector._merge_similar_ids(
+            id_timeline, embeddings, 
+            similarity_threshold=0.70 if L2_NORMALIZATION_ENABLED else 0.65,
+            use_l2_norm=L2_NORMALIZATION_ENABLED
+        )
+        logger.info(f"DUAL 모드 L2 정규화 ID 병합 완료 (L2: {L2_NORMALIZATION_ENABLED})")
+    else:
+        merged_timeline = id_timeline
+    
+    valid_ids = [fid for fid in merged_timeline if fid is not None]
     if not valid_ids:
         logger.warning("DUAL 모드: 인식된 얼굴이 없습니다.")
         reporter.end_stage("DUAL 모드 처리", segments=0)
@@ -286,8 +304,8 @@ def process_dual_mode_segments(id_timeline, fps, source_video, temp_dir, basenam
         person_folder_name = f"{DUAL_PERSON_FOLDER_PREFIX}{i}"
         logger.info(f"{person_folder_name} (face_id={target_id}, 등장 프레임={count}) 처리 시작")
 
-        # 2a. 해당 화자의 타임라인 생성
-        target_timeline_bool = [tid if tid == target_id else None for tid in id_timeline]
+        # 2a. 해당 화자의 타임라인 생성 (병합된 타임라인 사용)
+        target_timeline_bool = [tid if tid == target_id else None for tid in merged_timeline]
         
         # 2b. 해당 화자 영상만 트리밍
         person_trimmed_path = os.path.join(temp_dir, f"trimmed_{person_folder_name}.mp4")
