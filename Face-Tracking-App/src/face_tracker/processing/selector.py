@@ -7,6 +7,7 @@ from collections import Counter
 from typing import List, Optional, Dict, Any
 from src.face_tracker.config import TRACKING_MODE
 from src.face_tracker.utils.logging import logger
+from src.face_tracker.utils.similarity import calculate_face_similarity
 
 
 class TargetSelector:
@@ -30,7 +31,7 @@ class TargetSelector:
         elif mode == "most_frequent":
             # ID 병합 후 most_frequent 계산
             if embeddings:
-                merged_timeline = TargetSelector._merge_similar_ids(id_timeline, embeddings)
+                merged_timeline = TargetSelector._merge_similar_ids(id_timeline, embeddings, use_l2_norm=False)
                 return TargetSelector._select_most_frequent(merged_timeline)
             else:
                 return TargetSelector._select_most_frequent(id_timeline)
@@ -72,7 +73,7 @@ class TargetSelector:
         }
     
     @staticmethod
-    def _merge_similar_ids(id_timeline: List[Optional[int]], embeddings: Dict, similarity_threshold: float = 0.75) -> List[Optional[int]]:
+    def _merge_similar_ids(id_timeline: List[Optional[int]], embeddings: Dict, similarity_threshold: float = 0.75, use_l2_norm: bool = False) -> List[Optional[int]]:
         """
         유사한 ID들을 병합하여 같은 사람을 하나의 ID로 통합
         
@@ -80,6 +81,7 @@ class TargetSelector:
             id_timeline: 원본 ID 타임라인
             embeddings: ID별 임베딩 딕셔너리
             similarity_threshold: ID 병합 임계값
+            use_l2_norm: L2 정규화 사용 여부
             
         Returns:
             병합된 ID 타임라인
@@ -104,15 +106,17 @@ class TargetSelector:
                 if id2 in merge_map:
                     continue
                     
-                # 임베딩 유사도 계산
+                # 임베딩 유사도 계산 (L2 정규화 옵션 적용)
                 if id1 in embeddings and id2 in embeddings:
                     emb1 = embeddings[id1]
                     emb2 = embeddings[id2]
                     
-                    similarity = F.cosine_similarity(emb1, emb2, dim=1).item()
+                    # L2 정규화 사용 여부에 따라 다른 유사도 계산
+                    similarity = calculate_face_similarity(emb1, emb2, use_l2_norm=use_l2_norm)
                     
                     if similarity >= similarity_threshold:
                         merge_map[id2] = id1  # id2를 id1로 병합
+                        logger.debug(f"ID 병합: {id2} → {id1} (유사도: {similarity:.3f}, L2: {use_l2_norm})")
         
         # 타임라인에 병합 맵 적용
         merged_timeline = []
@@ -125,15 +129,16 @@ class TargetSelector:
         return merged_timeline
 
     @staticmethod
-    def select_dual_speakers(voice_segments, id_timeline, fps, embeddings=None):
+    def select_dual_speakers(voice_segments, id_timeline, fps, embeddings=None, use_l2_norm=True):
         """
-        DUAL 모드: 발화 구간별 상위 2명 화자 식별
+        DUAL 모드: 발화 구간별 상위 2명 화자 식별 (L2 정규화 지원)
         
         Args:
             voice_segments: VAD로 추출한 음성 구간 [(start, end), ...]
             id_timeline: 프레임별 face_id 리스트
             fps: 영상 FPS
             embeddings: 임베딩 정보 (선택사항)
+            use_l2_norm: L2 정규화 사용 여부
             
         Returns:
             {
@@ -144,9 +149,17 @@ class TargetSelector:
         if not voice_segments:
             return {'speaker_a': [], 'speaker_b': []}
             
-        # 임베딩 기반 ID 병합 (있는 경우) - 트래커 안정화를 위해 더 적극적으로 병합
+        # 임베딩 기반 ID 병합 (L2 정규화 적용)
+        # DUAL 모드는 더 엄격한 임계값 사용 (L2 정규화시 0.70, 아니면 0.65)
+        dual_threshold = 0.70 if use_l2_norm else 0.65
+        
         if embeddings:
-            merged_timeline = TargetSelector._merge_similar_ids(id_timeline, embeddings, similarity_threshold=0.65)
+            merged_timeline = TargetSelector._merge_similar_ids(
+                id_timeline, embeddings, 
+                similarity_threshold=dual_threshold,
+                use_l2_norm=use_l2_norm
+            )
+            logger.info(f"DUAL 모드 ID 병합 완료 (임계값: {dual_threshold}, L2: {use_l2_norm})")
         else:
             merged_timeline = id_timeline
             

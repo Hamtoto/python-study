@@ -20,6 +20,15 @@ TRACKER_MONITOR_WINDOW_SIZE = 20
 # 유사도 계산 설정
 SIMILARITY_THRESHOLD = 0.6  # 원래 설정으로 복구
 
+# L2 정규화 관련 설정
+L2_NORMALIZATION_ENABLED = True
+DUAL_MODE_SIMILARITY_THRESHOLD = 0.70  # DUAL 모드 전용 (더 엄격)
+SINGLE_MODE_SIMILARITY_THRESHOLD = 0.60  # SINGLE 모드 기존값 유지
+
+# L2 정규화 디버깅 설정
+L2_NORM_DEBUG_MODE = False  # 상세 로그 출력 여부
+SIMILARITY_COMPARISON_LOG = False  # 기존/신규 방식 비교 로그
+
 # 비디오 처리 설정
 CROP_SIZE = 250
 JUMP_THRESHOLD = 25.0
