@@ -45,19 +45,19 @@ class UnifiedLogger:
     
     def error(self, message: str):
         """에러 로그"""
-        self.logger.error(f"❌ {message}")
+        self.logger.error(f"ERROR: {message}")
     
     def success(self, message: str):
         """성공 로그"""
-        self.logger.info(f"✅ {message}")
+        self.logger.info(f"SUCCESS: {message}")
     
     def stage(self, message: str):
         """단계별 로그"""
-        self.logger.info(f"🔄 {message}")
+        self.logger.info(f"STAGE: {message}")
     
     def warning(self, message: str):
         """경고 로그"""
-        self.logger.warning(f"⚠️ {message}")
+        self.logger.warning(f"WARNING: {message}")
     
     def clear_log(self):
         """로그 파일 초기화"""

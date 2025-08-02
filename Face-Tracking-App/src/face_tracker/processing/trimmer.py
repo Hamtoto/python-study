@@ -7,6 +7,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from src.face_tracker.config import CUT_THRESHOLD_SECONDS, FACE_DETECTION_THRESHOLD_FRAMES, VIDEO_CODEC, AUDIO_CODEC, SEGMENT_LENGTH_SECONDS
 from src.face_tracker.utils.logging import logger
+from src.face_tracker.utils.exceptions import FFmpegError
 
 
 def create_condensed_video_ffmpeg(video_path: str, output_path: str, timeline: list[bool], fps: float, cut_threshold: float = CUT_THRESHOLD_SECONDS) -> bool:
@@ -114,28 +115,65 @@ def slice_video_parallel_ffmpeg(input_path: str, output_folder: str, segment_len
     FFmpeg를 사용한 병렬 비디오 분할
     """
     
+    logger.info(f"비디오 분할 시작 - 입력: {input_path}")
+    logger.info(f"출력 폴더: {output_folder}")
+    logger.info(f"세그먼트 길이: {segment_length}초")
+    
+    # 입력 파일 존재 확인
+    if not os.path.exists(input_path):
+        logger.error(f"입력 파일 없음: {input_path}")
+        return False
+    
+    # 출력 폴더 생성
+    os.makedirs(output_folder, exist_ok=True)
+    
     # 비디오 길이 확인
     cmd = ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'csv=p=0', input_path]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    duration = float(result.stdout.strip())
+    logger.info(f"비디오 길이 확인 명령: {' '.join(cmd)}")
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        duration = float(result.stdout.strip())
+        logger.info(f"비디오 총 길이: {duration:.1f}초")
+    except Exception as e:
+        logger.error(f"비디오 길이 확인 실패: {str(e)}")
+        return False
     
     # 병렬 처리를 위한 작업 리스트 생성
     tasks = []
     for start in range(0, int(duration), segment_length):
         end = min(start + segment_length, duration)
         if (end - start) < segment_length:
+            logger.info(f"세그먼트 스킵 - 너무 짧음: {start}초~{end:.1f}초 (길이: {end-start:.1f}초)")
             continue
         
         segment_filename = f"segment_{start}_{int(end)}.mp4"
         output_path = os.path.join(output_folder, segment_filename)
         tasks.append((input_path, output_path, start, end))
+        logger.info(f"세그먼트 생성 예정: {segment_filename} ({start}초~{end:.1f}초)")
+    
+    logger.info(f"총 {len(tasks)}개 세그먼트 생성 작업 준비 완료")
+    
+    if len(tasks) == 0:
+        logger.warning("생성할 세그먼트가 없습니다")
+        return False
     
     # 병렬 실행
+    logger.info(f"ThreadPoolExecutor로 {len(tasks)}개 세그먼트 병렬 처리 시작")
     with ThreadPoolExecutor(max_workers=4) as executor:
         results = list(executor.map(_slice_single_segment, tasks))
     
     success_count = sum(results)
-    logger.success(f"세그먼트 분할 완료: {success_count}/{len(tasks)}개")
+    logger.info(f"세그먼트 분할 완료: {success_count}/{len(tasks)}개 성공")
+    
+    # 생성된 파일 확인
+    created_files = [f for f in os.listdir(output_folder) if f.lower().endswith('.mp4')]
+    logger.info(f"실제 생성된 파일 수: {len(created_files)}개")
+    for f in created_files:
+        fpath = os.path.join(output_folder, f)
+        fsize = os.path.getsize(fpath) if os.path.exists(fpath) else 0
+        logger.info(f"  생성됨: {f} ({fsize} bytes)")
+    
     return success_count == len(tasks)
 
 
@@ -154,9 +192,21 @@ def _slice_single_segment(task):
     ]
     
     try:
-        subprocess.run(cmd, capture_output=True, check=True)
-        return True
-    except subprocess.CalledProcessError:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        
+        # 파일 생성 확인
+        if os.path.exists(output_path):
+            file_size = os.path.getsize(output_path)
+            logger.info(f"세그먼트 생성 성공: {os.path.basename(output_path)} ({file_size} bytes)")
+            return True
+        else:
+            logger.error(f"세그먼트 파일 생성되지 않음: {os.path.basename(output_path)}")
+            return False
+            
+    except subprocess.CalledProcessError as e:
+        logger.error(f"FFmpeg 세그먼트 생성 실패: {os.path.basename(output_path)}")
+        logger.error(f"  명령: {' '.join(cmd)}")
+        logger.error(f"  stderr: {e.stderr}")
         return False
 
 
