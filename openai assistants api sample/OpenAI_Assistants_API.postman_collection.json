@@ -1,0 +1,369 @@
+{
+	"info": {
+		"_postman_id": "12345678-1234-1234-1234-123456789abc",
+		"name": "OpenAI Assistants API Backend",
+		"description": "FastAPI backend for OpenAI Assistants API - 디지털 사이니지 데이터 분석 전문가 Assistant",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "12345678",
+		"updatedAt": "2025-01-11T00:00:00.000Z"
+	},
+	"item": [
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/api/v1/health",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"health"
+					]
+				},
+				"description": "헬스 체크 엔드포인트"
+			},
+			"response": []
+		},
+		{
+			"name": "Root Endpoint",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						""
+					]
+				},
+				"description": "루트 엔드포인트 - API 정보 조회"
+			},
+			"response": []
+		},
+		{
+			"name": "Chat - New Thread",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"message\": \"안녕하세요! 디지털 사이니지 시스템에 대해 궁금한 것이 있어요.\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/chat",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"chat"
+					]
+				},
+				"description": "새로운 스레드로 채팅 - thread_id 없이 전송"
+			},
+			"response": []
+		},
+		{
+			"name": "Chat - Existing Thread",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"message\": \"이전 대화를 기억하고 있나요? 추가적인 분석이 필요해요.\",\n  \"thread_id\": \"{{thread_id}}\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/chat",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"chat"
+					]
+				},
+				"description": "기존 스레드로 채팅 계속하기"
+			},
+			"response": []
+		},
+		{
+			"name": "Chat - With System Data",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"message\": \"사용자 질문: 최근 광고 성과는 어떤가요?\\n\\n현재 시스템 데이터:\\n- 타겟광고 수: 15개\\n- 디바이스 수: 8개\\n- 최근 시청 이벤트: 142개\\n\\n타겟광고 데이터: [{\\\"id\\\": 1, \\\"title\\\": \\\"겨울 세일\\\", \\\"views\\\": 320, \\\"clicks\\\": 15}, {\\\"id\\\": 2, \\\"title\\\": \\\"신상품 출시\\\", \\\"views\\\": 280, \\\"clicks\\\": 12}]\\n디바이스 데이터: [{\\\"id\\\": 1, \\\"location\\\": \\\"1층 로비\\\", \\\"status\\\": \\\"active\\\"}, {\\\"id\\\": 2, \\\"location\\\": \\\"2층 매장\\\", \\\"status\\\": \\\"active\\\"}]\\n시청 이벤트 데이터: [{\\\"timestamp\\\": \\\"2025-01-11T10:30:00Z\\\", \\\"device_id\\\": 1, \\\"ad_id\\\": 1, \\\"event_type\\\": \\\"view\\\"}, {\\\"timestamp\\\": \\\"2025-01-11T10:32:00Z\\\", \\\"device_id\\\": 1, \\\"ad_id\\\": 1, \\\"event_type\\\": \\\"click\\\"}]\",\n  \"thread_id\": \"{{thread_id}}\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/chat",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"chat"
+					]
+				},
+				"description": "시스템 데이터와 함께 디지털 사이니지 분석 요청"
+			},
+			"response": []
+		},
+		{
+			"name": "Create Thread",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/threads",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"threads"
+					]
+				},
+				"description": "새로운 대화 스레드 생성"
+			},
+			"response": []
+		},
+		{
+			"name": "Get Thread Messages",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/api/v1/threads/{{thread_id}}/messages",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"threads",
+						"{{thread_id}}",
+						"messages"
+					]
+				},
+				"description": "특정 스레드의 모든 메시지 조회"
+			},
+			"response": []
+		},
+		{
+			"name": "Send Message to Thread",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"content\": \"사용자가 보낸 메시지입니다.\",\n  \"role\": \"user\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/threads/{{thread_id}}/messages",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"threads",
+						"{{thread_id}}",
+						"messages"
+					]
+				},
+				"description": "특정 스레드에 메시지 추가 (Assistant 실행 없음)"
+			},
+			"response": []
+		},
+		{
+			"name": "Run Assistant",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/threads/{{thread_id}}/runs",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"threads",
+						"{{thread_id}}",
+						"runs"
+					]
+				},
+				"description": "특정 스레드에서 Assistant 실행"
+			},
+			"response": []
+		},
+		{
+			"name": "Get Run Status",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/api/v1/threads/{{thread_id}}/runs/{{run_id}}",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"threads",
+						"{{thread_id}}",
+						"runs",
+						"{{run_id}}"
+					]
+				},
+				"description": "Assistant 실행 상태 조회"
+			},
+			"response": []
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// 요청 전 실행되는 스크립트",
+					"console.log('API 요청 시작: ' + new Date().toISOString());"
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// 응답 후 실행되는 테스트 스크립트",
+					"pm.test('응답 상태가 200이어야 함', function () {",
+					"    pm.response.to.have.status(200);",
+					"});",
+					"",
+					"pm.test('응답이 JSON 형식이어야 함', function () {",
+					"    pm.response.to.be.json;",
+					"});",
+					"",
+					"// 채팅 응답인 경우 thread_id 저장",
+					"if (pm.response.json().thread_id) {",
+					"    pm.environment.set('thread_id', pm.response.json().thread_id);",
+					"    console.log('Thread ID 저장됨: ' + pm.response.json().thread_id);",
+					"}",
+					"",
+					"// 실행 ID가 있는 경우 저장",
+					"if (pm.response.json().id && pm.response.json().object === 'thread.run') {",
+					"    pm.environment.set('run_id', pm.response.json().id);",
+					"    console.log('Run ID 저장됨: ' + pm.response.json().id);",
+					"}"
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "https://hamtoto.kr/openai-api",
+			"type": "string",
+			"description": "API 서버 기본 URL"
+		},
+		{
+			"key": "thread_id",
+			"value": "thread_abc123",
+			"type": "string",
+			"description": "대화 스레드 ID (자동 생성됨)"
+		},
+		{
+			"key": "run_id",
+			"value": "run_def456",
+			"type": "string",
+			"description": "Assistant 실행 ID"
+		},
+		{
+			"key": "assistant_id",
+			"value": "asst_your_assistant_id",
+			"type": "string",
+			"description": "OpenAI Assistant ID"
+		}
+	]
+}

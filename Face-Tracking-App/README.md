@@ -12,6 +12,8 @@ Face-Tracking-App은 **GPU 최적화된 비디오 처리 파이프라인**으로
 ### 🏆 주요 성과
 - **GPU 사용률 97.3%** 달성 (목표 95% 초과)
 - **처리 시간 67% 단축** (45-60초 → 15-20초)
+- **DUAL_SPLIT 모드** 구현 (2인 화면 분할 동시 추적)
+- **실시간 디버그 로깅** 시스템 구축 (v1.1)
 - **통합 로깅 시스템** 구축 (76개 print문 최적화)
 - **성능 리포트 시스템** 구현 (실시간 모니터링)
 
@@ -27,6 +29,8 @@ pip install -r requirements.txt
 ```
 
 ### 2. 실행
+
+**Single Mode (기본 모드)**:
 ```bash
 # 간편 실행
 ./start.sh
@@ -35,10 +39,22 @@ pip install -r requirements.txt
 python face_tracker.py
 ```
 
+**DUAL_SPLIT Mode (화면 분할 2인 추적)**:
+```bash
+# DUAL_SPLIT 모드 실행
+./dual_split.sh
+
+# 또는 직접 실행  
+python src/face_tracker/main.py --mode dual_split
+```
+
 ### 3. 로그 확인
 ```bash
 # 실시간 로그 모니터링
 tail -f face_tracker.log
+
+# DUAL_SPLIT 모드 로그만 확인
+grep "DUAL_SPLIT" face_tracker.log
 ```
 
 ## 📊 성능 리포트 시스템
@@ -85,9 +101,10 @@ v1.0의 핵심 기능인 **자동 성능 리포트**가 각 비디오 처리 완
 
 ```
 Face-Tracking-App/
-├── face_tracker.py         # 메인 진입점
-├── start.sh                # 실행 스크립트
-├── face_tracker.log        # 통합 로그 파일
+├── start.sh                # Single 모드 실행 스크립트
+├── dual_split.sh           # DUAL_SPLIT 모드 실행 스크립트  
+├── face_tracker.log        # 실시간 통합 로그 파일
+├── dual_split_pipeline_diagram.txt # 시스템 구조 분석 다이어그램
 ├── src/face_tracker/       # 소스 코드
 │   ├── processing/         # 비디오 처리 로직
 │   │   ├── processor.py      # 메인 처리 파이프라인
@@ -100,23 +117,34 @@ Face-Tracking-App/
 │   │   ├── models.py         # 모델 관리 (Singleton)
 │   │   └── embeddings.py     # 임베딩 관리 (LRU Cache)
 │   ├── utils/              # 유틸리티
-│   │   ├── logging.py        # 통합 로깅 시스템
+│   │   ├── logging.py        # 실시간 디버그 로깅 시스템 (v1.1)
 │   │   ├── performance_reporter.py # 성능 리포트
+│   │   ├── adaptive_threshold.py # 적응형 임계값 유틸리티
 │   │   ├── audio.py          # 오디오 처리 (VAD)
 │   │   └── validation.py     # 입력 검증
-│   └── config.py           # 설정 파일
+│   ├── config.py           # 중앙 설정 파일
+│   └── dual_split_config.py # DUAL_SPLIT 모드 전용 설정
 ├── videos/
 │   ├── input/              # 입력 비디오
-│   └── output/             # 출력 세그먼트
+│   └── output/             # 출력 세그먼트 (Single mode) / 분할 영상 (DUAL_SPLIT mode)
 └── temp_proc/              # 임시 처리 파일
 ```
 
 ## 🏗️ 아키텍처 특징
 
+### 이중 처리 모드
+- **Single Mode**: 1명의 타겟을 추적하여 시간별 세그먼트 생성
+- **DUAL_SPLIT Mode**: 2명을 동시 추적하여 1920x1080 좌우 분할 화면 생성 (각 960px)
+
 ### GPU 최적화 아키텍처
 - **단일 GPU 워커 프로세스**: CUDA OOM 방지를 위한 순차 GPU 작업
 - **CPU 프로세스 풀**: FFmpeg 인코딩 병렬 처리
 - **Queue 기반 통신**: 프로세스 간 안전한 데이터 전송
+
+### DUAL_SPLIT 모드 특화 기능
+- **DualPersonTracker**: 벡터 유사도 + 위치 기반 하이브리드 매칭
+- **실시간 프레임 처리**: 프레임 스킵 없이 연속 처리로 부드러운 출력
+- **중앙 정렬 크롭**: 각 영역에서 얼굴이 중앙에 위치하도록 자동 조정
 
 ### Producer-Consumer 패턴
 - **얼굴 분석**: 프레임 I/O Thread + GPU 처리 Thread
@@ -128,9 +156,15 @@ Face-Tracking-App/
 - **GPU 메모리 풀**: 텐서 사전 할당으로 성능 향상
 - **LRU 캐시**: 임베딩 벡터 효율적 관리
 
-## 📈 v1.0 주요 업데이트
+## 📈 주요 업데이트
 
-### 🔧 로깅 시스템 통합
+### 🔍 v1.1 (2025) - Real-time Debug Logging
+- **실시간 디버그 로깅**: flush() 메서드로 즉시 로그 파일 기록
+- **DUAL_SPLIT 모드 상세 로그**: 프로세스 멈춤 현상 디버깅을 위한 단계별 추적
+- **세분화된 오류 처리**: try-except 블록으로 정확한 오류 위치 식별
+- **로그 필터링 시스템**: 이모지 기반 로그 레벨별 필터링 지원
+
+### 🔧 v1.0 (2024) - 로깅 시스템 통합
 - **76개 print문 → 구조화된 로그**로 전환
 - **단일 로그 파일** (`face_tracker.log`) 사용
 - **이모지 기반 로그 레벨**: 🔄 진행, ✅ 성공, ⚠️ 경고, ❌ 오류
@@ -181,10 +215,82 @@ htop
 tail -f face_tracker.log
 ```
 
+## 🔍 문제해결
+
+### DUAL_SPLIT 모드 프로세스 멈춤 현상
+
+**증상**: "🎯 DEBUG: DUAL_SPLIT 모드 분기 진입!" 로그 이후 프로세스 정지
+
+**진단 단계**:
+```bash
+# 1. 마지막 성공 단계 확인
+grep "✅ DUAL_SPLIT:" face_tracker.log | tail -3
+
+# 2. 오류 발생 지점 확인  
+grep "❌ DUAL_SPLIT:" face_tracker.log | tail -3
+
+# 3. 상세 진행 상황 확인
+grep "🔍 DUAL_SPLIT:" face_tracker.log | tail -10
+```
+
+**주요 멈춤 지점과 해결법**:
+- **ModelManager 초기화**: GPU 메모리 부족 → CUDA 캐시 정리 후 재시작
+- **비디오 파일 열기**: 파일 경로/코덱 문제 → 파일 존재 여부 및 형식 확인
+- **MTCNN 모델 로드**: CUDA 미지원 환경 → GPU 사용 가능 여부 확인
+
+### 로그 기반 성능 분석
+
+**로그 필터링 명령어**:
+```bash
+# 처리 단계별 로그 확인
+grep "🔄" face_tracker.log           # 주요 단계 진행상황  
+grep "🔧" face_tracker.log           # 상세 디버그 정보
+grep "⚠️" face_tracker.log           # 경고 메시지 확인
+
+# DUAL_SPLIT 전용 로그 분석
+grep "CREATE_SPLIT" face_tracker.log # 분할 화면 생성 과정
+grep "ASSIGN" face_tracker.log       # Person1/Person2 할당 과정
+```
+
+### 성능 최적화 가이드
+
+**GPU 메모리 최적화**:
+```bash
+# GPU 메모리 모니터링
+nvidia-smi -l 1
+
+# 배치 크기 조정 (config.py)
+BATCH_SIZE_ANALYZE = 128    # 256에서 128로 감소
+BATCH_SIZE_ID_TIMELINE = 64 # 128에서 64로 감소  
+```
+
+**디스크 I/O 최적화**:
+```bash
+# 프로덕션 환경에서 디버그 로그 비활성화
+export LOG_LEVEL=INFO
+
+# 개발 환경에서 디버그 로그 활성화
+export LOG_LEVEL=DEBUG
+```
+
 ## 🔮 로드맵
 
-### v1.1 계획
-- [ ] Docker 컨테이너화
+### v1.1 (2025) ✅ 완료
+- ✅ **실시간 디버그 로깅 시스템**: 프로세스 멈춤 현상 해결
+- ✅ **DUAL_SPLIT 모드 상세 로그**: 단계별 진행 추적
+- ✅ **세분화된 오류 처리**: 정확한 문제 지점 식별
+- ✅ **로그 필터링 시스템**: 이모지 기반 레벨별 분류
+
+### v1.2 계획  
+- [ ] **로그 기반 모니터링 대시보드**: 실시간 웹 인터페이스
+- [ ] **자동화된 성능 분석**: 로그 기반 병목 지점 자동 감지
+- [ ] **Docker 컨테이너화**: 환경 독립적 배포 지원
+- [ ] **RESTful API**: 비디오 처리 요청/응답 API 구현
+
+### v2.0 장기 계획
+- [ ] **멀티 비디오 동시 처리**: 병렬 파이프라인 구현
+- [ ] **클라우드 배포 지원**: AWS/GCP GPU 인스턴스 최적화
+- [ ] **실시간 스트림 처리**: RTMP/WebRTC 실시간 얼굴 추적
 
 ## 🤝 기여
 

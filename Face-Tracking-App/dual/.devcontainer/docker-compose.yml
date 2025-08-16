@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  dual-face-dev:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+      platforms:
+        - linux/amd64
+    
+    image: dual-face-gpu-pipeline:latest
+    container_name: dual-face-dev-container
+    
+    # DevContainer GPU 지원 (runArgs에서 처리)
+    
+    # 디바이스 및 권한 설정
+    devices:
+      - /dev/dri:/dev/dri
+    
+    privileged: true
+    
+    # 볼륨 마운트 설정
+    volumes:
+      - ..:/workspace:cached
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - dual-face-node-modules:/workspace/node_modules
+      - dual-face-pip-cache:/root/.cache/pip
+      
+    # 네트워크 및 포트 설정
+    network_mode: "host"
+    ports:
+      - "8000:8000"   # 개발 서버
+      - "8888:8888"   # Jupyter
+      - "5000:5000"   # Flask/FastAPI
+    
+    # 환경 변수
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+      - CUDA_VISIBLE_DEVICES=0
+      - DISPLAY=${DISPLAY:-:1}
+      - CUDA_CACHE_PATH=/workspace/.cuda_cache
+      - PYTHONPATH=/workspace
+      - PYTHONUNBUFFERED=1
+    
+    # GPU 런타임 설정
+    runtime: nvidia
+      
+    # 작업 디렉토리
+    working_dir: /workspace
+    
+    # 컨테이너 유지
+    stdin_open: true
+    tty: true
+    
+    # 메모리 및 공유 메모리 설정
+    shm_size: '2gb'
+    
+    # 재시작 정책
+    restart: unless-stopped
+
+# 볼륨 정의
+volumes:
+  dual-face-node-modules:
+  dual-face-pip-cache:

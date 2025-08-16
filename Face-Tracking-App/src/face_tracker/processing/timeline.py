@@ -15,7 +15,7 @@ from torchvision import transforms
 from src.face_tracker.core.models import ModelManager
 from src.face_tracker.core.embeddings import SmartEmbeddingManager
 from src.face_tracker.config import DEVICE, BATCH_SIZE_ID_TIMELINE, SIMILARITY_THRESHOLD
-from src.face_tracker.utils.similarity import find_matching_id_with_best_fallback
+from src.face_tracker.utils.similarity import find_matching_id_with_best_fallback_enhanced
 
 
 def generate_id_timeline(video_path: str, device=DEVICE, batch_size: int = BATCH_SIZE_ID_TIMELINE):
@@ -126,8 +126,8 @@ def generate_id_timeline(video_path: str, device=DEVICE, batch_size: int = BATCH
                             # ID 할당
                             for emb in embeddings:
                                 all_embs = emb_manager.get_all_embeddings()
-                                track_id = find_matching_id_with_best_fallback(
-                                    emb.unsqueeze(0), all_embs, SIMILARITY_THRESHOLD
+                                track_id = find_matching_id_with_best_fallback_enhanced(
+                                    emb.unsqueeze(0), all_embs, SIMILARITY_THRESHOLD, use_l2_norm=True
                                 )
                                 if track_id is None:
                                     track_id = next_id[0]

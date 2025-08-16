@@ -1,0 +1,63 @@
+{
+  "name": "Dual-Face GPU Pipeline",
+  "dockerComposeFile": "./docker-compose.yml",
+  "service": "dual-face-dev",
+  "workspaceFolder": "/workspace",
+  
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.black-formatter",
+        "ms-python.isort",
+        "ms-python.mypy-type-checker",
+        "ms-toolsai.jupyter",
+        "ms-azuretools.vscode-docker",
+        "nvidia.nsight-vscode-edition",
+        "ms-vscode.cpptools",
+        "ms-python.debugpy",
+        "GitHub.copilot"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "python.formatting.provider": "black",
+        "python.linting.enabled": true,
+        "python.linting.mypyEnabled": true,
+        "python.analysis.typeCheckingMode": "basic",
+        "files.watcherExclude": {
+          "**/temp_proc/**": true,
+          "**/videos/output/**": true,
+          "**/.git/objects/**": true,
+          "**/.git/subtree-cache/**": true,
+          "**/node_modules/*/**": true
+        },
+        "terminal.integrated.shell.linux": "/bin/bash"
+      }
+    }
+  },
+
+  "forwardPorts": [
+    8888,
+    8000,
+    5000
+  ],
+  
+  "postCreateCommand": "pip install --upgrade pip",
+  
+  "remoteUser": "root",
+  
+  "mounts": [
+    "source=/dev,target=/dev,type=bind,consistency=cached"
+  ],
+  
+  "runArgs": [
+    "--gpus=all",
+    "--privileged",
+    "--device=/dev/dri",
+    "--shm-size=8g"
+  ],
+  
+  "features": {},
+  
+  "shutdownAction": "stopCompose"
+}

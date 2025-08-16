@@ -1,0 +1,77 @@
+# 사전 라이브러리 설치
+sudo apt-get update
+sudo apt-get install libgtk-3-dev libtbb-dev libavcodec-dev libavformat-dev libswscale-dev libv4l-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+
+# pip로 설치된 OpenCV 제거 (충돌 방지)
+# 기존에 pip로 설치된 opencv-python이 있다면, 빌드 과정 및 설치 시 충돌의 원인이 되므로 깨끗하게 삭제한다.
+pip uninstall opencv-python opencv-contrib-python
+
+# 설치 후 폴더 구조
+/home/User/work/
+├── opencv/            <-- 소스 코드 최상위 폴더 (CMakeLists.txt 파일이 여기에 있음)
+│   └── build/         <-- 컴파일을 진행하는 폴더 (현재 위치)
+└── opencv_contrib/
+
+cd /home/User/work/opencv/build
+
+# CMake 실행 
+# 옵션은 사양, 경로 따라 수정 
+cmake -D CMAKE_BUILD_TYPE=RELEASE \
+    -D CMAKE_INSTALL_PREFIX=/usr/local \
+    -D OPENCV_EXTRA_MODULES_PATH=/home/hamtoto/work/opencv_contrib/modules \
+    -D PYTHON3_EXECUTABLE=$(which python3) \
+    -D PYTHON3_NUMPY_INCLUDE_DIRS=$(python3 -c "import numpy; print(numpy.get_include())") \
+    -D OPENCV_ENABLE_NONFREE=ON \
+    -D BUILD_EXAMPLES=ON \
+    -D INSTALL_PYTHON_EXAMPLES=ON \
+    -D INSTALL_C_EXAMPLES=OFF \
+    -D BUILD_opencv_python3=ON \
+    -D WITH_CUDA=ON \
+    -D WITH_CUDNN=ON \
+    -D OPENCV_DNN_CUDA=ON \
+    -D CUDA_ARCH_BIN=12.0 \
+    -D WITH_CUBLAS=1 \
+    -D ENABLE_FAST_MATH=1 \
+    -D CUDA_FAST_MATH=1 \
+    -D WITH_TBB=ON \
+    -D WITH_V4L=ON \
+    -D WITH_QT=OFF \
+    -D WITH_GTK=ON \
+    -D WITH_FFMPEG=ON \
+    -D WITH_GSTREAMER=ON \
+    -D BUILD_TESTS=OFF \
+    -D BUILD_PERF_TESTS=OFF ..
+
+# 컴파일
+# 모든 코어 사용
+make -j$(nproc)
+
+# 바로 설치할거면 설치로 진행, deb 파일 만들거면 deb 생성으로 진행
+# 설치
+sudo make install
+
+# deb 생성
+sudo checkinstall
+
+# 설치 후 라이브러리 인식 
+sudo ldconfig
+
+
+# 최종확인 py code
+import cv2
+
+# OpenCV 버전 출력
+print(f"OpenCV version: {cv2.__version__}")
+
+# CUDA 지원 확인
+cuda_devices = cv2.cuda.getCudaEnabledDeviceCount()
+print(f"CUDA-enabled devices: {cuda_devices}")
+
+if cuda_devices > 0:
+    print("✅ OpenCV가 성공적으로 CUDA와 함께 설치되었습니다!")
+    cv2.cuda.printCudaDeviceInfo(0) # 첫 번째 GPU 정보 출력
+else:
+    print("❌ OpenCV는 설치되었지만, CUDA 지원이 활성화되지 않았습니다.")
+
+
+# 진행중 뭔가 막힌다면 AI를 적극 활용할것 GPT, Gemini 등등..

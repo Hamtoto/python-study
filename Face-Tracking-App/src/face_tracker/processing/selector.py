@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from collections import Counter
 from typing import List, Optional, Dict, Any
-from src.face_tracker.config import TRACKING_MODE
+from src.face_tracker.config import TRACKING_MODE, DUAL_MODE_SIMILARITY_THRESHOLD, SINGLE_MODE_SIMILARITY_THRESHOLD
 from src.face_tracker.utils.logging import logger
 from src.face_tracker.utils.similarity import calculate_face_similarity
 
@@ -150,8 +150,8 @@ class TargetSelector:
             return {'speaker_a': [], 'speaker_b': []}
             
         # 임베딩 기반 ID 병합 (L2 정규화 적용)
-        # DUAL 모드는 더 엄격한 임계값 사용 (L2 정규화시 0.70, 아니면 0.65)
-        dual_threshold = 0.70 if use_l2_norm else 0.65
+        # DUAL 모드는 config에서 설정된 임계값 사용
+        dual_threshold = DUAL_MODE_SIMILARITY_THRESHOLD
         
         if embeddings:
             merged_timeline = TargetSelector._merge_similar_ids(

@@ -105,13 +105,23 @@ def analyze_video_faces(video_path: str, batch_size: int = BATCH_SIZE_ANALYZE, d
                             continue
                     
                     if buffer:
-                        # MTCNN GPU 배치 처리
+                        # MTCNN GPU 배치 처리 + 다중 스케일 폴백
                         start_gpu = time.time()
-                        boxes_list, _ = mtcnn.detect(buffer)  # GPU 처리
+                        boxes_list, _ = mtcnn.detect(buffer)  # 기본 GPU 처리
+                        
+                        # 감지 실패한 프레임에 대해 다중 스케일 시도
+                        face_results = []
+                        for i, (frame, boxes) in enumerate(zip(buffer, boxes_list)):
+                            if boxes is not None:
+                                face_results.append(True)
+                            else:
+                                # 다중 스케일로 재시도
+                                multi_boxes, _ = model_manager.detect_faces_multi_scale(frame)
+                                face_results.append(multi_boxes is not None and len(multi_boxes) > 0)
+                        
                         gpu_time = time.time() - start_gpu
                         
                         # 결과 저장 (Thread-safe)
-                        face_results = [b is not None for b in boxes_list]
                         with timeline_lock:
                             face_detected_timeline.extend(face_results)
                         

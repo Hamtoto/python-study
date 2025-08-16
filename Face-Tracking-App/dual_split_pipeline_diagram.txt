@@ -1,0 +1,107 @@
+# Face-Tracking-App DUAL_SPLIT 시스템 파이프라인 머메이드 다이어그램
+
+```mermaid
+graph TD
+    A[비디오 입력] --> B[얼굴 감지 - MTCNN]
+    B --> C[얼굴 인식 - FaceNet]
+    C --> D[ID 타임라인 생성]
+    D --> E[L2 정규화 ID 병합]
+    
+    E --> F[하이브리드 Person 할당]
+    F --> F1[공간 위치 기반 초기 할당]
+    F1 --> F2[빈도 분석 기반 재조정]
+    F2 --> G{2명의 주요 인물 확인}
+    
+    G -->|실패| H[경고 메시지 출력]
+    G -->|성공| I[Person1, Person2 할당 완료]
+    
+    I --> J[분할 화면 비디오 생성 프로세스]
+    
+    J --> K[프레임별 처리]
+    K --> L[MTCNN 얼굴 검출]
+    L --> M{현재 프레임 ID 확인}
+    
+    M -->|Person1| N1[좌측 960x1080 영역 처리]
+    M -->|Person2| N2[우측 960x1080 영역 처리]
+    M -->|없음| O[프레임 스킵]
+    
+    N1 --> P1[중앙 정렬 얼굴 크롭]
+    N2 --> P2[중앙 정렬 얼굴 크롭]
+    
+    P1 --> Q[1920x1080 분할 화면 합성]
+    P2 --> Q
+    O --> R[다음 프레임]
+    
+    Q --> S[OpenCV 비디오 라이터 출력]
+    S --> T[최종 dual_split.mp4 생성]
+    R --> K
+    
+    %% 설정 및 구성 요소
+    subgraph "Configuration"
+        CONFIG1[DUAL_SPLIT_MODE_ENABLED]
+        CONFIG2[SPLIT_WIDTH: 960px]
+        CONFIG3[SPLIT_HEIGHT: 1080px]
+        CONFIG4[FACE_CENTER_ALIGNMENT]
+        CONFIG5[FACE_CROP_SIZE: 2.5x]
+    end
+    
+    subgraph "핵심 알고리즘"
+        ALG1[assign_persons_hybrid]
+        ALG2[create_split_screen_video]
+        ALG3[create_centered_face_crop]
+    end
+    
+    subgraph "L2 정규화 처리"
+        L2_1[DUAL_MODE_SIMILARITY_THRESHOLD]
+        L2_2[TargetSelector._merge_similar_ids]
+        L2_3[SmartEmbeddingManager]
+    end
+    
+    %% 색상 및 스타일
+    classDef inputOutput fill:#e1f5fe
+    classDef processing fill:#f3e5f5
+    classDef algorithm fill:#e8f5e8
+    classDef config fill:#fff3e0
+    classDef decision fill:#ffebee
+    
+    class A,T inputOutput
+    class B,C,D,E,J,K,L,N1,N2,P1,P2,Q,S processing
+    class F,F1,F2,ALG1,ALG2,ALG3 algorithm
+    class CONFIG1,CONFIG2,CONFIG3,CONFIG4,CONFIG5,L2_1,L2_2,L2_3 config
+    class G,M decision
+```
+
+## 주요 특징
+
+### 1. 입력 처리 단계
+- **비디오 입력**: 원본 비디오 파일 로드
+- **얼굴 감지**: MTCNN을 사용한 실시간 얼굴 검출
+- **얼굴 인식**: FaceNet(InceptionResnetV1)을 통한 얼굴 임베딩 추출
+
+### 2. ID 관리 및 할당
+- **ID 타임라인**: 프레임별 얼굴 ID 매핑
+- **L2 정규화**: 동일 인물의 다른 각도/조명 얼굴 통합
+- **하이브리드 할당**: 공간 위치 + 빈도 분석을 통한 2인 식별
+
+### 3. 분할 화면 생성
+- **1920x1080 출력**: 좌측(Person1) + 우측(Person2) 각각 960x1080
+- **중앙 정렬**: 얼굴이 각 영역의 중앙에 위치하도록 크롭
+- **실시간 처리**: 프레임별 동적 얼굴 검출 및 크롭
+
+### 4. 핵심 알고리즘
+- **assign_persons_hybrid()**: 2명의 주요 인물 자동 식별
+- **create_split_screen_video()**: 분할 화면 비디오 생성
+- **create_centered_face_crop()**: 얼굴 중심 크롭 (2.5배 확대)
+
+### 5. 성능 최적화
+- **10프레임 샘플링**: 빠른 인물 할당을 위한 프레임 스킵
+- **동적 크롭 사이즈**: 얼굴 크기의 2.5배로 자동 조정
+- **메모리 효율성**: OpenCV VideoWriter를 통한 직접 출력
+
+## 출력 결과
+- **파일명**: `{basename}_dual_split.mp4`
+- **해상도**: 1920x1080 (좌우 분할)
+- **코덱**: MP4V (OpenCV 기본)
+- **FPS**: 원본 비디오와 동일
+
+이 시스템은 2명의 화자가 등장하는 비디오를 자동으로 좌우 분할 화면으로 처리하여, 각 인물의 얼굴이 항상 중앙에 위치하도록 하는 고도화된 비디오 처리 파이프라인입니다.

@@ -4,8 +4,14 @@
 import os
 import psutil
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from multiprocessing import cpu_count
+
+try:
+    import pytz
+    PYTZ_AVAILABLE = True
+except ImportError:
+    PYTZ_AVAILABLE = False
 from src.face_tracker.utils.logging import logger
 from src.face_tracker.config import BATCH_SIZE_ANALYZE, BATCH_SIZE_ID_TIMELINE
 
@@ -16,10 +22,24 @@ class PerformanceReporter:
     def __init__(self, video_name: str):
         self.video_name = video_name
         self.start_time = time.time()
+        
+        # 서울 시간대로 시작 시간 기록
+        if PYTZ_AVAILABLE:
+            seoul_tz = pytz.timezone('Asia/Seoul')
+            self.start_datetime = datetime.now(seoul_tz)
+        else:
+            # UTC+9 시간대 생성 (서울)
+            seoul_tz = timezone(timedelta(hours=9))
+            self.start_datetime = datetime.now(seoul_tz)
+        
         self.stages = {}
         self.cpu_cores_used = 0
         self.total_frames = 0
         self.segments_count = 0
+        self.threshold_optimization = None  # 임계값 최적화 정보
+        
+        # DUAL_SPLIT 모드 전용 통계
+        self.dual_split_stats = None
         
     def start_stage(self, stage_name: str):
         """단계 시작 시간 기록"""
@@ -38,11 +58,44 @@ class PerformanceReporter:
         self.segments_count = segments_count
         self.cpu_cores_used = cpu_cores
     
+    def set_threshold_optimization_info(self, applied_threshold: float, 
+                                      original_threshold: float, 
+                                      confidence: str, 
+                                      statistics: dict):
+        """임계값 최적화 정보 설정"""
+        self.threshold_optimization = {
+            'applied_threshold': applied_threshold,
+            'original_threshold': original_threshold,
+            'confidence': confidence,
+            'statistics': statistics,
+            'improvement_percent': abs(applied_threshold - original_threshold) / original_threshold * 100
+        }
+    
+    def set_dual_split_stats(self, processed_frames: int, total_frames: int, segments: int):
+        """DUAL_SPLIT 모드 전용 통계 설정"""
+        self.dual_split_stats = {
+            'processed_frames': processed_frames,
+            'total_frames': total_frames,
+            'segments': segments
+        }
+        # 기본 처리 정보도 업데이트
+        self.total_frames = total_frames
+        self.segments_count = segments
+    
     def generate_report(self):
         """상세 성능 리포트 생성 및 출력"""
         total_time = time.time() - self.start_time
         total_minutes = total_time / 60
         total_hours = total_time / 3600
+        
+        # 종료 시간 계산 (서울 시간대)
+        if PYTZ_AVAILABLE:
+            seoul_tz = pytz.timezone('Asia/Seoul')
+            end_datetime = datetime.now(seoul_tz)
+        else:
+            # UTC+9 시간대 생성 (서울)
+            seoul_tz = timezone(timedelta(hours=9))
+            end_datetime = datetime.now(seoul_tz)
         
         # 리포트 헤더
         report_lines = [
@@ -51,6 +104,13 @@ class PerformanceReporter:
             f"📊 {self.video_name} 처리 완료 리포트",
             "=" * 80,
         ]
+        
+        # 시간 정보
+        report_lines.extend([
+            f"🕐 시작 시간: {self.start_datetime.strftime('%Y-%m-%d %H:%M:%S %Z')}",
+            f"🕐 종료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S %Z')}",
+            ""
+        ])
         
         # 기본 정보
         report_lines.extend([
@@ -118,6 +178,28 @@ class PerformanceReporter:
             report_lines.append(f"   • 메모리 사용량: {memory_mb:.1f} MB")
         except:
             pass
+        
+        # 임계값 최적화 정보
+        if self.threshold_optimization:
+            opt = self.threshold_optimization
+            report_lines.extend([
+                "",
+                "🔧 동적 임계값 최적화:",
+                f"   • 계산된 임계값: {opt['applied_threshold']:.3f}",
+                f"   • 기본 임계값: {opt['original_threshold']:.3f}",
+                f"   • 최적화 신뢰도: {opt['confidence']}",
+                f"   • 개선율: {opt['improvement_percent']:+.1f}%"
+            ])
+            
+            if 'statistics' in opt and opt['statistics']:
+                stats = opt['statistics']
+                if 'same_person' in stats and 'different_person' in stats:
+                    same = stats['same_person']
+                    diff = stats['different_person']
+                    report_lines.extend([
+                        f"   • 같은 사람 유사도: {same['mean']:.3f} ± {same['std']:.3f} ({same['count']}개)",
+                        f"   • 다른 사람 유사도: {diff['mean']:.3f} ± {diff['std']:.3f} ({diff['count']}개)"
+                    ])
         
         report_lines.extend([
             "",
