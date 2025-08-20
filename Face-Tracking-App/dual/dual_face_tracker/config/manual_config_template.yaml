@@ -1,0 +1,142 @@
+# manual_config_template.yaml
+# Dual-Face Tracker 수동 설정 템플릿
+# 이 파일을 manual_config.yaml로 복사하여 사용하세요
+
+# =============================================================================
+# 🎯 사용법:
+# 1. 이 파일을 manual_config.yaml로 복사
+# 2. 하드웨어에 맞게 값 수정
+# 3. 불필요한 섹션은 삭제하거나 주석 처리
+# 4. manual_config.yaml은 자동 프로빙보다 우선순위가 높습니다
+# =============================================================================
+
+# 하드웨어 정보 (실제 하드웨어에 맞게 수정)
+hardware:
+  gpu_name: "NVIDIA GeForce RTX 5090"  # 실제 GPU 이름
+  nvdec_max_sessions: 4                # RTX 5090: 4개 NVDEC 엔진
+  nvenc_max_sessions: 3                # RTX 5090: 3개 NVENC 세션
+  vram_gb: 32                          # RTX 5090: 32GB VRAM
+  driver_version: "566.03"             # 실제 드라이버 버전
+  cuda_version: "12.8"                 # 실제 CUDA 버전
+  compute_capability: "8.9"            # RTX 5090: Compute Capability 8.9
+
+# 성능 설정 (고성능 설정)
+performance:
+  max_concurrent_streams: 4            # 4개 동시 스트림 (RTX 5090 최적화)
+  batch_size_analyze: 256              # 대용량 VRAM 활용
+  vram_safety_margin: 0.15             # 15% 안전 마진 (적극적)
+  target_gpu_utilization: 0.85         # 85% 목표 활용률
+
+# NVDEC 설정 (최적화)
+nvdec_settings:
+  max_sessions: 4                      # RTX 5090 4개 엔진 활용
+  preferred_format: "nv12"
+  hwaccel_device: "cuda"
+  thread_type: "frame"                 # 프레임 단위 멀티스레딩
+
+# NVENC 설정 (고품질)
+nvenc_settings:
+  max_sessions: 3                      # RTX 5090 3세션 활용
+  preset: "p4"                         # 고품질 프리셋 (RTX 50xx 지원)
+  rc_mode: "vbr"                       # Variable Bit Rate
+  profile: "high"
+  level: "5.2"                         # 4K 지원 레벨
+  tune: "hq"                           # High Quality 튜닝
+
+# 디코딩 설정 (고성능)
+decoding:
+  output_format: "rgb24"
+  interpolation: "bicubic"             # 고품질 보간
+  seek_threshold: 0.5                  # 정밀한 탐색
+  frame_buffer_size: 50                # 대용량 버퍼
+
+# 인코딩 설정 (4K 최적화)
+encoding:
+  video_codec: "h264_nvenc"
+  audio_codec: "aac"
+  bitrate: "20M"                       # 4K용 고비트레이트
+  keyframe_interval: 60                # 60프레임 간격 (2초 @30fps)
+  preset: "p4"                         # RTX 50xx 전용 프리셋
+  tune: "hq"
+
+# 에러 처리 설정 (관대한 설정)
+error_handling:
+  max_retries: 5                       # 고성능 환경에서 더 많은 재시도
+  timeout_seconds: 60                  # 충분한 타임아웃
+  graceful_degradation: true
+  fallback_to_cpu: false               # GPU 전용 (CPU 폴백 비활성화)
+
+# 로깅 설정 (상세)
+logging:
+  level: "DEBUG"                       # 상세한 로그
+  file_path: "dual_face_tracker.log"
+  max_size_mb: 500                     # 대용량 로그 파일
+  backup_count: 5
+  console_output: true
+
+# 모니터링 설정 (적극적)
+monitoring:
+  gpu_memory_check_interval: 5         # 자주 체크
+  performance_report_interval: 50      # 상세한 리포트
+  enable_profiling: true               # 프로파일링 활성화
+
+# RTX 5090 전용 최적화 설정
+rtx5090_optimizations:
+  enable_tensor_cores: true            # Tensor Core 활용
+  enable_rt_cores: false               # RT Core는 비활성화 (불필요)
+  memory_pool_size_mb: 4096            # 4GB 메모리 풀
+  stream_priority: "high"              # 높은 우선순위
+  power_limit_watts: 600               # RTX 5090 최대 전력
+
+# 4K 비디오 전용 설정
+4k_settings:
+  enable_4k_processing: true
+  max_resolution: "3840x2160"
+  preferred_fps: 60
+  hdr_support: true
+  color_depth: "10bit"
+
+# 개발자 모드 설정
+developer_mode:
+  debug_mode: true
+  save_intermediate_frames: true       # 중간 프레임 저장
+  enable_memory_profiling: true        # 메모리 프로파일링
+  verbose_gpu_logging: true            # 상세한 GPU 로그
+  benchmark_mode: true                 # 벤치마크 모드
+  export_metrics: true                 # 성능 지표 내보내기
+
+# 사용자 커스텀 설정
+custom_settings:
+  # 여기에 사용자 정의 설정 추가
+  # 예: project_specific_batch_size: 512
+  
+# 메타데이터
+metadata:
+  config_type: "manual"
+  description: "Manual configuration template for dual-face tracker"
+  version: "1.0"
+  created_by: "User"
+  last_modified: "2025-01-XX"
+  
+# =============================================================================
+# 🔧 설정 가이드:
+#
+# RTX 4090 사용자:
+#   - nvdec_max_sessions: 3
+#   - nvenc_max_sessions: 2
+#   - vram_gb: 24
+#   - max_concurrent_streams: 3
+#
+# RTX 3090 사용자:
+#   - nvdec_max_sessions: 2
+#   - nvenc_max_sessions: 2  
+#   - vram_gb: 24
+#   - max_concurrent_streams: 2
+#
+# RTX 3080 사용자:
+#   - nvdec_max_sessions: 2
+#   - nvenc_max_sessions: 2
+#   - vram_gb: 10
+#   - max_concurrent_streams: 2
+#   - batch_size_analyze: 128
+# =============================================================================
