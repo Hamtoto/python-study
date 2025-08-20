@@ -18,13 +18,22 @@ source .venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Main execution
+# Main execution (Single mode)
 ./start.sh
 # or
 python face_tracker.py
 
-# Check logs
+# DUAL_SPLIT mode execution (2-person split screen)
+./dual_split.sh
+# or
+python src/face_tracker/main.py --mode dual_split
+
+# Check logs (Real-time monitoring)
 tail -f face_tracker.log
+
+# Filter specific logs
+grep "DUAL_SPLIT" face_tracker.log    # DUAL_SPLIT mode logs
+grep "🔧" face_tracker.log            # Debug logs only
 ```
 
 ## 📈 Version 1.0 - Major Updates (2024)
@@ -35,6 +44,13 @@ tail -f face_tracker.log
 - **76개 print문 최적화**: 의미있는 로그 메시지로 변경
 - **이모지 기반 로그**: `🔄 stage()`, `✅ success()`, `⚠️ warning()`, `❌ error()`
 - **tqdm 프로그레스바 최적화**: `ncols=60, leave=False`로 화면 공간 60% 절약
+
+### 🔍 **실시간 디버그 로깅 시스템 v1.1**
+- **flush() 메서드 추가**: 모든 로그 메서드에서 자동 flush로 즉시 파일 기록
+- **debug() 메서드 신설**: `🔧` 이모지로 상세 디버그 정보 제공
+- **파일 핸들러 버퍼링 비활성화**: `buffering=0`으로 실시간 로그 출력 보장
+- **DUAL_SPLIT 모드 상세 로그**: 프로세스 멈춤 현상 디버깅을 위한 단계별 추적
+- **세분화된 try-except 블록**: 정확한 오류 위치 식별을 위한 단계별 예외 처리
 
 ### 📊 **성능 리포트 시스템 추가**
 - **실시간 성능 측정**: 단계별 처리 시간, 배치 크기, FPS 자동 측정
@@ -107,10 +123,19 @@ temp_proc/        # Temporary processing files (auto-cleaned)
 ## 🏗️ Architecture Deep Dive
 
 ### 1. High-Level Processing Pipeline
+
+**Single Mode (Default)**:
 ```
 Input Video → Face Analysis → ID Timeline → Condensed Video → 
 Target Selection → Video Trimming → Segment Slicing → 
 GPU Cropping (Producer-Consumer) → CPU FFmpeg Encoding (Pool) → Final Output
+```
+
+**DUAL_SPLIT Mode (2-Person Split Screen)**:
+```
+Input Video → Face Analysis → ID Timeline → L2 Normalization → 
+Person Assignment (Hybrid) → DualPersonTracker → Split Screen Processing → 
+Real-time Frame Processing → 1920x1080 Split Output (960px each side)
 ```
 
 ### 2. GPU-Optimized Architecture (Key Innovation)
@@ -125,7 +150,21 @@ GPU Cropping (Producer-Consumer) → CPU FFmpeg Encoding (Pool) → Final Output
 - **id_timeline_generator.py**: Similar threading for face recognition
 - **Dynamic Batch Sizing**: 64→128→256 based on queue depth and GPU memory
 
-### 3. Memory Management System
+### 3. DUAL_SPLIT Mode Architecture
+
+**DualPersonTracker System**:
+- **Hybrid Person Assignment**: Frequency analysis + spatial positioning for accurate Person1/Person2 identification
+- **Vector-based Matching**: Face embedding similarity with L2 normalization for person continuity
+- **Position-based Tracking**: Spatial coordinates tracking to prevent face jumping between persons
+- **Real-time Quality Monitoring**: Detection rate, person balance, and tracking performance metrics
+
+**Split Screen Processing**:
+- **1920x1080 Output**: Left 960px (Person1) + Right 960px (Person2) 
+- **Centered Face Cropping**: 2.5x face size with automatic centering in each region
+- **No Frame Skipping**: Continuous processing ensures smooth output (vs. 10-frame sampling in Single mode)
+- **Dynamic Face Matching**: Per-frame face detection with tracker-based person assignment
+
+### 4. Memory Management System
 
 **ModelManager (Singleton)**:
 - MTCNN and InceptionResnetV1 loaded once globally
@@ -152,13 +191,16 @@ core/
 └── embedding_manager.py   # Face embedding vector management
 
 utils/
-├── logger.py              # Advanced logging (console + file)
-├── console_logger.py      # Console output to file capture
+├── logging.py             # Unified logging with real-time debug support
+├── performance_reporter.py # Performance monitoring and reporting
+├── adaptive_threshold.py  # Adaptive threshold utilities
 ├── exceptions.py          # Custom exception classes
-└── input_validator.py     # Input file validation
+└── validation.py          # Input file validation
 
 config.py                  # Central configuration
-main.py                    # Entry point with logging wrapper
+dual_split_config.py       # DUAL_SPLIT mode specific settings
+main.py                    # Entry point with mode selection support
+dual_split.sh              # DUAL_SPLIT mode execution script
 ```
 
 ## ⚙️ Key Configuration Parameters
@@ -169,6 +211,14 @@ BATCH_SIZE_ANALYZE = 256        # Face detection batch size
 BATCH_SIZE_ID_TIMELINE = 128    # Face recognition batch size
 DEVICE = 'cuda:0'               # GPU device
 SEGMENT_LENGTH_SECONDS = 10     # Output segment length
+```
+
+**DUAL_SPLIT Mode Settings** (`dual_split_config.py`):
+```python
+SKIP_NO_FACE_FRAMES = False     # Process all frames (no skipping)
+TRACKING_SIMILARITY_THRESHOLD = 0.6    # Face embedding similarity threshold
+TRACKING_POSITION_THRESHOLD = 100      # Spatial position tracking threshold
+DUAL_MODE_SIMILARITY_THRESHOLD = 0.85  # ID merging threshold for L2 normalization
 ```
 
 **GPU Memory Settings**:
@@ -247,9 +297,90 @@ nvidia-smi -l 1
 # Process monitoring  
 htop
 
-# Log analysis
-tail -f log.log
-tail -f videos/output/detailed.log
+# Real-time log monitoring
+tail -f face_tracker.log
+```
+
+## 🔍 Real-time Debug System
+
+### Debug Log Levels and Filtering
+
+**Log Level Structure**:
+```bash
+🔄 stage()     # Major stage transitions (blue info level)
+✅ success()   # Successful completion (green success level) 
+⚠️ warning()   # Non-critical warnings (yellow warning level)
+❌ error()     # Critical errors (red error level)
+🔧 debug()     # Detailed debug information (gray debug level)
+```
+
+**Log Filtering Commands**:
+```bash
+# Filter by log type
+grep "🔄" face_tracker.log          # Stage transitions only
+grep "✅" face_tracker.log          # Success messages only  
+grep "⚠️" face_tracker.log          # Warnings only
+grep "❌" face_tracker.log          # Errors only
+grep "🔧" face_tracker.log          # Debug details only
+
+# Filter by system component
+grep "DUAL_SPLIT" face_tracker.log   # DUAL_SPLIT mode logs
+grep "CREATE_SPLIT" face_tracker.log # Split screen creation logs
+grep "ASSIGN" face_tracker.log       # Person assignment logs
+
+# Filter by processing stage  
+grep "🔍 DUAL_SPLIT:" face_tracker.log    # Step progress
+grep "✅ DUAL_SPLIT:" face_tracker.log    # Step completion
+grep "❌ DUAL_SPLIT:" face_tracker.log    # Step failures
+```
+
+### Troubleshooting Process Hangs
+
+**Step-by-Step Debugging for "DUAL_SPLIT 모드 분기 진입" Issue**:
+
+1. **Check Initial Entry**:
+   ```bash
+   grep "🎯 DEBUG: DUAL_SPLIT 모드 분기 진입" face_tracker.log
+   ```
+
+2. **Identify Last Successful Step**:
+   ```bash
+   grep "✅ DUAL_SPLIT:" face_tracker.log | tail -5
+   ```
+
+3. **Find Failure Point**:
+   ```bash
+   grep "❌ DUAL_SPLIT:" face_tracker.log | tail -3
+   ```
+
+4. **Check Detailed Progress**:
+   ```bash
+   grep "🔍 DUAL_SPLIT:" face_tracker.log | tail -10
+   ```
+
+**Common Hang Points and Solutions**:
+
+| **Hang Location** | **Log Pattern** | **Solution** |
+|-------------------|-----------------|--------------|
+| ModelManager Init | `🏗️ CREATE_SPLIT: ModelManager 초기화...` | Check GPU memory, restart if OOM |
+| Video File Opening | `🎬 CREATE_SPLIT: 비디오 파일 열기...` | Verify video file path and codec |
+| MTCNN Loading | `🏗️ CREATE_SPLIT: MTCNN 모델 로드...` | Check CUDA availability |
+| Frame Processing | `🔄 CREATE_SPLIT: Frame X 읽기...` | Check video corruption at frame X |
+
+### Performance Impact Monitoring
+
+**Debug Logging Overhead**:
+- **Expected Impact**: 5-10% processing time increase
+- **Memory Overhead**: ~50-100MB additional log buffering
+- **Disk I/O**: Increased due to real-time flush operations
+
+**Performance Comparison**:
+```bash
+# Disable debug logging (production)
+export LOG_LEVEL=INFO
+
+# Enable debug logging (development)  
+export LOG_LEVEL=DEBUG
 ```
 
 ## 🧪 Testing Strategy
@@ -324,6 +455,14 @@ tail -f videos/output/detailed.log
 
 ## 🔄 Version History
 
+### v1.1 (2025) - Debug Logging Enhancement
+- ✅ **Real-time debug logging system**: Immediate log file writes with flush() method
+- ✅ **DUAL_SPLIT mode detailed logging**: Step-by-step process tracking for debugging
+- ✅ **Granular try-except blocks**: Precise error location identification
+- ✅ **Debug log filtering**: Organized log levels with emoji prefixes
+- ✅ **Buffer-free file handlers**: Real-time log output guaranteed
+- ✅ **Process hang debugging**: Comprehensive logging for "DUAL_SPLIT 모드 분기 진입" issue
+
 ### v1.0 (2024) - Production Ready
 - ✅ Unified logging system implementation
 - ✅ Performance reporting system
@@ -335,10 +474,11 @@ tail -f videos/output/detailed.log
 
 ---
 
-**Version**: 1.0  
-**Last Updated**: 2024  
-**Status**: Production Ready  
+**Version**: 1.1  
+**Last Updated**: 2025  
+**Status**: Debug Enhanced  
 **GPU Optimization**: 97.3%  
-**Performance Report**: ✅ Enabled
+**Real-time Debug Logging**: ✅ Enabled  
+**DUAL_SPLIT Mode**: ✅ Supported
 
 **For Questions**: Check `README.md`, `refactor.md`, and source code comments

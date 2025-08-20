@@ -3,12 +3,16 @@ Face-Tracking-App 설정 파일
 """
 import torch
 
+# 임베딩 차원 설정
+FACE_EMBEDDING_DIM = 1024  # 512 → 1024로 확장 (더 정확한 인식)
+USE_HIGH_DIM_EMBEDDING = True  # 고차원 임베딩 사용 여부
+
 # 디바이스 설정
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-# 배치 처리 설정
-BATCH_SIZE_ANALYZE = 256  # GPU 메모리 안전을 위해 축소
-BATCH_SIZE_ID_TIMELINE = 128  # GPU 메모리 안전을 위해 축소
+# 배치 처리 설정 (고차원 임베딩 고려)
+BATCH_SIZE_ANALYZE = 128 if USE_HIGH_DIM_EMBEDDING else 256  # 1024차원: 배치 절반
+BATCH_SIZE_ID_TIMELINE = 64 if USE_HIGH_DIM_EMBEDDING else 128  # 메모리 절약
 
 # 임베딩 관리자 설정
 EMBEDDING_MAX_SIZE = 15  # 원래 설정으로 복구
@@ -17,8 +21,24 @@ EMBEDDING_TTL_SECONDS = 30  # 원래 설정으로 복구
 # 트래커 모니터 설정
 TRACKER_MONITOR_WINDOW_SIZE = 20
 
-# 유사도 계산 설정
-SIMILARITY_THRESHOLD = 0.6  # 원래 설정으로 복구
+# 유사도 계산 설정 (실제 비디오 데이터 기준 최적화)
+SIMILARITY_THRESHOLD = 0.75  # 실제 데이터 분석 결과 기반
+
+# L2 정규화 관련 설정
+L2_NORMALIZATION_ENABLED = True
+DUAL_MODE_SIMILARITY_THRESHOLD = 0.80  # DUAL 모드 전용 (더 엄격한 구분)
+SINGLE_MODE_SIMILARITY_THRESHOLD = 0.70  # SINGLE 모드 (약간 관대)
+
+# L2 정규화 디버깅 설정
+L2_NORM_DEBUG_MODE = False  # 상세 로그 출력 여부
+SIMILARITY_COMPARISON_LOG = False  # 기존/신규 방식 비교 로그
+
+# 동적 임계값 최적화 설정
+ENABLE_ADAPTIVE_THRESHOLD = True  # 동적 임계값 계산 활성화
+ADAPTIVE_THRESHOLD_MIN_CONFIDENCE = "medium"  # 최소 신뢰도 레벨 (high/medium/low)
+ADAPTIVE_THRESHOLD_MIN_IMPROVEMENT = 2.0  # 최소 개선율 (%)
+ADAPTIVE_THRESHOLD_SAFETY_RANGE = (0.6, 0.95)  # 안전 임계값 범위
+ADAPTIVE_THRESHOLD_MIN_SAMPLES = 5  # 최소 샘플 수 (같은 사람/다른 사람 각각)
 
 # 비디오 처리 설정
 CROP_SIZE = 250
