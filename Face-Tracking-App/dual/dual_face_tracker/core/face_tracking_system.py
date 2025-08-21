@@ -18,18 +18,34 @@ import sys
 import time
 import os
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Tuple, Optional, List, Dict, Any
 import cv2
 import numpy as np
 from PIL import Image
 from tqdm import tqdm
+import logging
 
 # 프로젝트 경로 추가
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root.parent / "src"))
+
+# 로깅 시스템 설정
+from ..utils.logger import get_logger
+
+# TqdmLoggingHandler for progress bar compatibility
+class TqdmLoggingHandler(logging.Handler):
+    """tqdm 프로그레스바와 호환되는 로깅 핸들러"""
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            tqdm.write(msg)
+        except:
+            self.handleError(record)
+
+# 로거 초기화
+logger = get_logger(__name__, level=logging.INFO)
 
 # AutoSpeakerDetector import
 from .auto_speaker_detector import AutoSpeakerDetector
@@ -40,7 +56,7 @@ import torch.nn.functional as F
 from torchvision import transforms
 if torch.cuda.is_available():
     torch.cuda.set_device(0)
-    print(f"🖥️ GPU 설정: {torch.cuda.get_device_name(0)}")
+    logger.info(f"GPU 설정: {torch.cuda.get_device_name(0)}")
 
 # 설정 import
 from ..config.dual_config import (
@@ -52,11 +68,25 @@ from ..config.dual_config import (
 
 # 프로젝트 모델 import (conditional) 
 MODEL_MANAGER_AVAILABLE = True
-print("✅ DUAL 독립 버전 모드 (ModelManager 활성화)")
+logger.info("DUAL 독립 버전 모드 (ModelManager 활성화)")
 
 
 class FaceDetection:
-    """얼굴 검출 결과 (임베딩 지원)"""
+    """
+    얼굴 검출 결과 클래스
+    
+    MTCNN, Haar Cascade, DNN 등 다양한 검출 방법으로부터 얻은 얼굴 정보를 저장합니다.
+    FaceNet 임베딩과 Person1/Person2 매칭 점수를 포함합니다.
+    
+    Attributes:
+        x1, y1, x2, y2: 얼굴 바운딩 박스 좌표
+        confidence: 검출 신뢰도 (0.0 ~ 1.0)
+        width, height: 얼굴 크기
+        center_x, center_y: 얼굴 중심 좌표
+        area: 얼굴 영역 넓이
+        embedding: FaceNet 임베딩 벡터 (torch.Tensor)
+        p1_score, p2_score: Person1/Person2와의 하이브리드 매칭 점수
+    """
     def __init__(self, bbox: Tuple[int, int, int, int], confidence: float):
         self.x1, self.y1, self.x2, self.y2 = bbox
         self.confidence = confidence
@@ -81,7 +111,20 @@ class FaceDetection:
 
 
 class FaceTracker:
-    """검출 기반 얼굴 트래커 (OpenCV 4.13 호환)"""
+    """
+    검출 기반 얼굴 추적 클래스
+    
+    프레임별 얼굴 검출 결과를 바탕으로 부드러운 추적을 수행합니다.
+    위치 기반 스무딩과 검출 히스토리를 통해 안정적인 추적을 제공합니다.
+    
+    Attributes:
+        person_id: 추적 대상 ID ('person1' 또는 'person2')
+        smoothing_alpha: 위치 스무딩 계수 (0.0 ~ 1.0)
+        face_detection: 현재 프레임의 얼굴 검출 결과
+        smooth_center: 스무딩된 얼굴 중심 좌표
+        detection_history: 최근 검출 위치 히스토리
+        tracking_confidence: 추적 신뢰도
+    """
     
     def __init__(self, person_id: str, smoothing_alpha: float = 0.15):
         self.person_id = person_id
@@ -114,7 +157,18 @@ class FaceTracker:
         self.reassignment_trigger_count = 10  # 재할당 검토를 위한 낮은 신뢰도 연속 횟수
         
     def update_detection(self, detection: Optional[FaceDetection]) -> bool:
-        """검출 기반 업데이트 (트래커 없음)"""
+        """
+        얼굴 검출 결과로 추적 상태 업데이트
+        
+        새로운 얼굴 검출 결과를 받아 추적 상태를 업데이트합니다.
+        위치 스무딩, 히스토리 관리, 통계 업데이트를 수행합니다.
+        
+        Args:
+            detection: 새로운 얼굴 검출 결과, None이면 검출 실패
+            
+        Returns:
+            업데이트 성공 여부 (True: 검출 성공, False: 검출 실패)
+        """
         self.total_frames += 1
         
         if detection is None:
@@ -185,7 +239,19 @@ class FaceTracker:
         return self.fixed_crop_size  # 항상 동일한 값 반환
     
     def get_crop_region(self, frame: np.ndarray, margin_factor: float = 2.5) -> np.ndarray:
-        """완전 고정 크기 크롭 영역 반환"""
+        """
+        고정 크기 얼굴 크롭 영역 추출
+        
+        현재 추적 중인 얼굴을 중심으로 고정된 크기의 크롭 영역을 반환합니다.
+        얼굴이 검출되지 않은 경우 Person ID에 따라 화면의 좌반부 또는 우반부를 반환합니다.
+        
+        Args:
+            frame: 입력 프레임 이미지
+            margin_factor: 얼굴 크기 대비 크롭 마진 배율 (기본값: 2.5)
+            
+        Returns:
+            크롭된 이미지 영역 (numpy 배열)
+        """
         h, w = frame.shape[:2]
         
         # 얼굴이 없으면 기본 영역
@@ -354,20 +420,32 @@ class FaceTracker:
 
 
 class FaceEmbeddingTracker(FaceTracker):
-    """고급 얼굴 임베딩 기반 트래커 (SmartEmbeddingManager + 고급 유사도 함수 활용)"""
+    """
+    임베딩 기반 고급 얼굴 추적 클래스
+    
+    FaceNet 임베딩 벡터를 사용하여 얼굴 ID를 지속적으로 추적합니다.
+    임베딩 히스토리 관리와 유사도 계산을 통해 동일 인물 여부를 판단합니다.
+    
+    Attributes:
+        face_embeddings: 임베딩 벡터 히스토리 리스트
+        reference_embedding: 대표 임베딩 (평균)
+        embedding_threshold: 동일 인물 판단 임계값
+        max_embeddings: 유지할 최대 임베딩 개수
+        similarity_scores: 최근 유사도 점수 히스토리
+    """
     
     def __init__(self, person_id: str, smoothing_alpha: float = 0.3):
         super().__init__(person_id, smoothing_alpha)
         
         # 고급 임베딩 관리자 (SmartEmbeddingManager 비활성화)
         self.smart_embedding_manager = None
-        print(f"⚠️ {person_id}: SmartEmbeddingManager 비활성화")
+        logger.warning(f"{person_id}: SmartEmbeddingManager 비활성화")
         
         # 개별 임베딩 추적 (디버깅용)
         self.face_embeddings = []  # 백업 히스토리
         self.reference_embedding = None  # 대표 임베딩 (평균)
         self.max_embeddings = 10  # 최대 10개 임베딩 유지
-        self.embedding_threshold = 0.35  # Phase 1: 0.75 → 0.35 (Identity-based 강화)
+        self.embedding_threshold = 0.35  # 임베딩 매칭 임계값
         
         # 고급 통계
         self.embedding_updates = 0
@@ -414,8 +492,10 @@ class FaceEmbeddingTracker(FaceTracker):
                     new_embedding.unsqueeze(0), 
                     use_l2_norm=self.l2_normalization_enabled
                 )
+            except (RuntimeError, AttributeError, ValueError, TypeError) as e:
+                logger.warning(f"고급 유사도 계산 실패: {e}, 기본 방법 사용")
             except Exception as e:
-                print(f"⚠️ 고급 유사도 계산 실패: {e}, 기본 방법 사용")
+                logger.error(f"예상치 못한 유사도 계산 오류: {e}, 기본 방법 사용")
                 # 백업 방법: 기본 코사인 유사도
                 score = torch.cosine_similarity(
                     torch.nn.functional.normalize(self.reference_embedding, p=2, dim=-1).unsqueeze(0),
@@ -506,7 +586,19 @@ class FaceEmbeddingTracker(FaceTracker):
 
 
 class SimplePreScanner:
-    """빠른 사전 스캔으로 주요 2명 찾기"""
+    """
+    비디오 사전 스캔 클래스
+    
+    비디오 전체를 빠르게 스캔하여 주요 2명의 평균 위치를 찾습니다.
+    일정 간격으로 프레임을 샘플링하여 계산 비용을 최소화합니다.
+    
+    Attributes:
+        debug_mode: 디버그 출력 활성화 여부
+        face_positions: 수집된 얼굴 위치 데이터 리스트
+    
+    Methods:
+        quick_scan: 비디오를 빠르게 스캔하여 2명의 평균 위치 반환
+    """
     
     def __init__(self, debug_mode: bool = False):
         self.debug_mode = debug_mode
@@ -525,21 +617,21 @@ class SimplePreScanner:
         """
         import cv2
         
-        print(f"🔍 사전 분석 시작: {sample_rate}프레임마다 샘플링")
+        logger.debug(f"사전 분석 시작: {sample_rate}프레임마다 샘플링")
         
         # 얼굴 검출기 로드 (기존 시스템과 동일한 경로 사용)
         face_cascade = cv2.CascadeClassifier('/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_default.xml')
         
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            print(f"❌ 비디오 열기 실패: {video_path}")
+            logger.error(f"비디오 열기 실패: {video_path}")
             return None
             
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
         
-        print(f"   📹 총 {total_frames}프레임, {total_frames/fps:.1f}초")
-        print(f"   🎯 분석할 프레임: {total_frames//sample_rate}개")
+        logger.info(f"총 {total_frames}프레임, {total_frames/fps:.1f}초")
+        logger.debug(f"분석할 프레임: {total_frames//sample_rate}개")
         
         self.face_positions = []
         frame_idx = 0
@@ -568,15 +660,15 @@ class SimplePreScanner:
                 # 진행률 표시 (매 300프레임마다)
                 if frame_idx % 300 == 0:
                     progress = (frame_idx / total_frames) * 100
-                    print(f"   📊 진행률: {progress:.1f}% ({len(self.face_positions)}개 얼굴 발견)")
+                    logger.debug(f"진행률: {progress:.1f}% ({len(self.face_positions)}개 얼굴 발견)")
         
         finally:
             cap.release()
         
-        print(f"✅ 스캔 완료: {len(self.face_positions)}개 얼굴 발견")
+        logger.info(f"스캔 완료: {len(self.face_positions)}개 얼굴 발견")
         
         if len(self.face_positions) < 10:
-            print("⚠️ 충분한 얼굴 데이터 없음")
+            logger.warning("충분한 얼굴 데이터 없음")
             return None
         
         # 좌우 기반으로 클러스터링
@@ -597,7 +689,7 @@ class SimplePreScanner:
         right_faces = [f for f in self.face_positions if f[0] >= mid_x]
         
         if len(left_faces) < 3 or len(right_faces) < 3:
-            print("⚠️ 좌우 얼굴 데이터 부족")
+            logger.warning("좌우 얼굴 데이터 부족")
             return None
         
         # 각 그룹의 평균 위치 계산
@@ -610,16 +702,28 @@ class SimplePreScanner:
         person1_pos = (left_avg_x, left_avg_y)
         person2_pos = (right_avg_x, right_avg_y)
         
-        if self.debug_mode:
-            print(f"📍 사전 분석 결과:")
-            print(f"   왼쪽 그룹: {len(left_faces)}개, 평균 위치={person1_pos}")
-            print(f"   오른쪽 그룹: {len(right_faces)}개, 평균 위치={person2_pos}")
+        logger.debug(f"사전 분석 결과:")
+        logger.debug(f"왼쪽 그룹: {len(left_faces)}개, 평균 위치={person1_pos}")
+        logger.debug(f"오른쪽 그룹: {len(right_faces)}개, 평균 위치={person2_pos}")
         
         return person1_pos, person2_pos
 
 
 class StablePositionTracker:
-    """위치 연속성 기반 안정적인 얼굴 추적 (임베딩 하이브리드 준비됨)"""
+    """
+    위치 연속성 기반 안정적 얼굴 추적 클래스
+    
+    얼굴의 위치 히스토리를 분석하여 Person1/Person2를 일관되게 할당합니다.
+    초기화 단계에서 크기 기반 할당을 수행하고, 이후 위치 연속성을 유지합니다.
+    
+    Attributes:
+        person1_history, person2_history: 각 인물의 위치 히스토리
+        history_size: 저장할 최대 위치 개수
+        init_threshold: 초기화에 필요한 프레임 수
+        max_distance_threshold: 동일 인물로 인식할 최대 거리
+        debug_mode: 디버그 출력 활성화 여부
+        prescan_profiles: 사전 스캔된 평균 위치 프로파일
+    """
     
     def __init__(self, debug_mode: bool = False, prescan_profiles: Optional[Tuple[Tuple[float, float], Tuple[float, float]]] = None):
         # 위치 히스토리
@@ -657,12 +761,25 @@ class StablePositionTracker:
             self.person2_history = [person2_pos] * 5
             self.is_initialized = True
             self.init_frames = self.init_threshold  # 초기화 스킵
-            print(f"✅ 사전 스캔 프로파일로 초기화: P1={person1_pos}, P2={person2_pos}")
+            logger.info(f"사전 스캔 프로파일로 초기화: P1={person1_pos}, P2={person2_pos}")
         else:
-            print(f"🎯 StablePositionTracker 초기화 (초기화 {self.init_threshold}프레임, 히스토리 {self.history_size}개)")
+            logger.debug(f"StablePositionTracker 초기화 (초기화 {self.init_threshold}프레임, 히스토리 {self.history_size}개)")
     
     def track_faces(self, faces: List[FaceDetection], frame_idx: int, frame: np.ndarray = None) -> Tuple[Optional[FaceDetection], Optional[FaceDetection]]:
-        """메인 추적 메서드: 초기화 또는 위치 기반 추적"""
+        """
+        위치 기반 안정적 얼굴 추적 메인 메서드
+        
+        초기화 단계에서는 크기 기반 할당을 수행하고,
+        이후에는 위치 연속성을 기반으로 안정적인 추적을 수행합니다.
+        
+        Args:
+            faces: 검출된 얼굴 리스트
+            frame_idx: 현재 프레임 번호
+            frame: 현재 프레임 이미지 (옵션)
+            
+        Returns:
+            (Person1 얼굴, Person2 얼굴) 튜플
+        """
         
         if not faces:
             return None, None
@@ -698,13 +815,12 @@ class StablePositionTracker:
         # 초기화 완료 체크
         if self.init_frames >= self.init_threshold:
             self.is_initialized = True
-            if self.debug_mode:
-                print(f"✅ 초기화 완료 (프레임 {frame_idx}): P1 히스토리={len(self.person1_history)}, P2 히스토리={len(self.person2_history)}")
+            logger.debug(f"초기화 완료 (프레임 {frame_idx}): P1 히스토리={len(self.person1_history)}, P2 히스토리={len(self.person2_history)}")
         
         if self.debug_mode and frame_idx % 10 == 0:
             size1 = person1_face.area if person1_face else 0
             size2 = person2_face.area if person2_face else 0
-            print(f"📊 초기화 {self.init_frames}/{self.init_threshold}: P1=위치{person1_face.center if person1_face else None}, P2=위치{person2_face.center if person2_face else None}")
+            logger.debug(f"초기화 {self.init_frames}/{self.init_threshold}: P1=위치{person1_face.center if person1_face else None}, P2=위치{person2_face.center if person2_face else None}")
         
         return person1_face, person2_face
     
@@ -753,9 +869,9 @@ class StablePositionTracker:
                 self._update_person_history(1, person1_face)
                     
                 if self.debug_mode:
-                    print(f"✅ P1 거리 매칭: {min_dist:.1f}px <= {self.max_distance_threshold}px")
+                    logger.debug(f"P1 거리 매칭: {min_dist:.1f}px <= {self.max_distance_threshold}px")
             elif self.debug_mode:
-                print(f"❌ P1 거리 초과: {min_dist:.1f}px > {self.max_distance_threshold}px")
+                logger.error(f"P1 거리 초과: {min_dist:.1f}px > {self.max_distance_threshold}px")
         
         # Person2 찾기: 남은 얼굴 중 가장 가까운
         if self.person2_history:
@@ -779,16 +895,16 @@ class StablePositionTracker:
                 self._update_person_history(2, person2_face)
                     
                 if self.debug_mode:
-                    print(f"✅ P2 거리 매칭: {min_dist:.1f}px <= {self.max_distance_threshold}px")
+                    logger.debug(f"P2 거리 매칭: {min_dist:.1f}px <= {self.max_distance_threshold}px")
             elif self.debug_mode:
-                print(f"❌ P2 거리 초과: {min_dist:.1f}px > {self.max_distance_threshold}px")
+                logger.error(f"P2 거리 초과: {min_dist:.1f}px > {self.max_distance_threshold}px")
         
         # 단일 얼굴 처리: Person2 가능성 체크
         if len(faces) == 1 and person1_face and not person2_face:
             face = faces[0]
             if self._is_closer_to_person2(face):
                 if self.debug_mode:
-                    print(f"🔄 단일얼굴을 P2로 재할당: {face.center}")
+                    logger.debug(f"단일얼굴을 P2로 재할당: {face.center}")
                 person1_face = None
                 person2_face = face
                 # Person2 히스토리 업데이트
@@ -807,18 +923,18 @@ class StablePositionTracker:
                 self._update_person_history(2, person2_face)
                 
                 if self.debug_mode:
-                    print(f"🔄 폴백 메커니즘: P2에 두 번째 큰 얼굴 할당 {person2_face.center}")
+                    logger.debug(f"폴백 메커니즘: P2에 두 번째 큰 얼굴 할당 {person2_face.center}")
         
         # 디버그 정보 출력
         if self.debug_mode and frame_idx % 30 == 0:
             p1_info = f"pos={person1_face.center}, size={person1_face.area:.0f}" if person1_face else "없음"
             p2_info = f"pos={person2_face.center}, size={person2_face.area:.0f}" if person2_face else "없음"
-            print(f"🎯 프레임 {frame_idx} 추적: P1={p1_info}, P2={p2_info}")
+            logger.debug(f"프레임 {frame_idx} 추적: P1={p1_info}, P2={p2_info}")
             
             if person1_face and person2_face:
                 dist_p1 = self._calculate_distance(person1_face.center, self._get_predicted_position(self.person1_history[:-1]))
                 dist_p2 = self._calculate_distance(person2_face.center, self._get_predicted_position(self.person2_history[:-1]))
-                print(f"📍 이동 거리: P1={dist_p1:.1f}px, P2={dist_p2:.1f}px")
+                logger.debug(f"이동 거리: P1={dist_p1:.1f}px, P2={dist_p2:.1f}px")
         
         return person1_face, person2_face
     
@@ -826,7 +942,7 @@ class StablePositionTracker:
         """사전 스캔 결과를 바탕으로 얼굴을 예상 위치에 할당"""
         if not faces:
             if self.debug_mode:
-                print(f"🔍 _assign_by_expected_position: 얼굴 없음")
+                logger.debug("_assign_by_expected_position: 얼굴 없음")
             return None, None
         
         person1_face = None
@@ -834,7 +950,7 @@ class StablePositionTracker:
         used_faces = set()
         
         if self.debug_mode:
-            print(f"🔍 _assign_by_expected_position: {len(faces)}개 얼굴, P1히스토리={len(self.person1_history)}, P2히스토리={len(self.person2_history)}")
+            logger.debug(f"_assign_by_expected_position: {len(faces)}개 얼굴, P1히스토리={len(self.person1_history)}, P2히스토리={len(self.person2_history)}")
         
         # Person1 할당 (왼쪽, 첫 번째 사람)
         if self.person1_history:
@@ -843,7 +959,7 @@ class StablePositionTracker:
             best_face_idx = -1
             
             if self.debug_mode:
-                print(f"🔍 P1 예상위치: {predicted_p1_pos}")
+                logger.debug(f"P1 예상위치: {predicted_p1_pos}")
             
             for i, face in enumerate(faces):
                 if face.confidence < self.min_confidence:
@@ -862,9 +978,9 @@ class StablePositionTracker:
                 person1_face = faces[best_face_idx]
                 used_faces.add(best_face_idx)
                 if self.debug_mode:
-                    print(f"✅ P1 할당: 얼굴{best_face_idx}, 거리={min_dist:.1f}px")
+                    logger.debug(f"P1 할당: 얼굴{best_face_idx}, 거리={min_dist:.1f}px")
             elif self.debug_mode:
-                print(f"❌ P1 할당 실패: 모든 얼굴이 조건 불만족")
+                logger.error("P1 할당 실패: 모든 얼굴이 조건 불만족")
         
         # Person2 할당 (오른쪽, 두 번째 사람)
         if self.person2_history:
@@ -873,7 +989,7 @@ class StablePositionTracker:
             best_face_idx = -1
             
             if self.debug_mode:
-                print(f"🔍 P2 예상위치: {predicted_p2_pos}")
+                logger.debug(f"P2 예상위치: {predicted_p2_pos}")
             
             for i, face in enumerate(faces):
                 if i in used_faces:
@@ -895,13 +1011,13 @@ class StablePositionTracker:
             if best_face_idx >= 0:
                 person2_face = faces[best_face_idx]
                 if self.debug_mode:
-                    print(f"✅ P2 할당: 얼굴{best_face_idx}, 거리={min_dist:.1f}px")
+                    logger.debug(f"P2 할당: 얼굴{best_face_idx}, 거리={min_dist:.1f}px")
             else:
                 if self.debug_mode:
-                    print(f"❌ P2 할당 실패: 사용가능한 얼굴 없음 (총 {len(faces)}개, 사용됨 {used_faces})")
+                    logger.error(f"P2 할당 실패: 사용가능한 얼굴 없음 (총 {len(faces)}개, 사용됨 {used_faces})")
         else:
             if self.debug_mode:
-                print(f"❌ P2 히스토리 없음: 초기화되지 않음")
+                logger.error("P2 히스토리 없음: 초기화되지 않음")
         
         return person1_face, person2_face
     
@@ -960,7 +1076,7 @@ class StablePositionTracker:
                 person2_face = left_faces[1]  # 두번째
         
         if self.debug_mode:
-            print(f"🔄 좌우 기반 할당: 왼쪽={len(left_faces)}개, 오른쪽={len(right_faces)}개")
+            logger.debug(f"좌우 기반 할당: 왼쪽={len(left_faces)}개, 오른쪽={len(right_faces)}개")
             if person1_face:
                 print(f"   P1: 위치{person1_face.center}, 크기{person1_face.area:.0f}")
             if person2_face:
@@ -994,8 +1110,10 @@ class StablePositionTracker:
                     face_crop = self.model_manager.extract_face_crop(face, frame)
                     if face_crop is not None:
                         face_embedding = self.model_manager.get_embedding(face_crop)
-                except:
-                    pass  # 임베딩 추출 실패시 계속 진행
+                except (AttributeError, RuntimeError, ValueError) as e:
+                    logger.debug(f"임베딩 추출 실패 (계속 진행): {e}")
+                except Exception as e:
+                    logger.warning(f"예상치 못한 임베딩 추출 오류: {e}")
             
             if face_embedding is not None:
                 # 임베딩 유사도 계산 (코사인 유사도)
@@ -1029,7 +1147,7 @@ class StablePositionTracker:
                 best_p1_face = None
         
         if self.debug_mode:
-            print(f"🔍 임베딩 기반 할당: P1점수={best_p1_score:.3f}, P2점수={best_p2_score:.3f}")
+            logger.debug(f"임베딩 기반 할당: P1점수={best_p1_score:.3f}, P2점수={best_p2_score:.3f}")
         
         return best_p1_face, best_p2_face
     
@@ -1067,9 +1185,9 @@ class StablePositionTracker:
         
         if self.debug_mode:
             if len(scores) >= 2:
-                print(f"🔍 중요도 기반 할당: P1점수={scores[0][1]:.3f}, P2점수={scores[1][1]:.3f}")
+                logger.debug(f"중요도 기반 할당: P1점수={scores[0][1]:.3f}, P2점수={scores[1][1]:.3f}")
             elif len(scores) == 1:
-                print(f"🔍 중요도 기반 할당: P1점수={scores[0][1]:.3f}, P2없음")
+                logger.debug(f"중요도 기반 할당: P1점수={scores[0][1]:.3f}, P2없음")
             else:
                 print(f"🔍 중요도 기반 할당: 점수 계산 실패")
         
@@ -1087,7 +1205,7 @@ class StablePositionTracker:
         dist_to_p2 = self._calculate_distance(face.center, p2_pos)
         
         if self.debug_mode:
-            print(f"🔍 단일얼굴 거리비교: P1={dist_to_p1:.1f}px, P2={dist_to_p2:.1f}px")
+            logger.debug(f"단일얼굴 거리비교: P1={dist_to_p1:.1f}px, P2={dist_to_p2:.1f}px")
         
         # Person2가 더 가까우면 True
         return dist_to_p2 < dist_to_p1
@@ -1178,7 +1296,27 @@ class StablePositionTracker:
 
 
 class DualFaceTrackingSystem:
-    """통합 얼굴 트래킹 시스템"""
+    """
+    듀얼 얼굴 추적 메인 시스템 클래스
+    
+    2명의 얼굴을 검출, 추적, 분류하여 1920x1080 스플릿 스크린 비디오를 생성합니다.
+    MTCNN 얼굴 검출, FaceNet 임베딩, 위치 기반 추적을 통합하여 안정적인 결과를 제공합니다.
+    
+    주요 기능:
+    - 다중 검출 방법 지원 (MTCNN, Haar, DNN, MediaPipe)
+    - 하이브리드 얼굴 매칭 (임베딩 + 위치 + 크기)
+    - 실시간 얼굴 크롭 및 스플릿 스크린 합성
+    - 오디오 보존 및 FFmpeg 후처리
+    - 검출되지 않은 구간 자동 트리밍
+    
+    Attributes:
+        input_path: 입력 비디오 경로
+        output_path: 출력 비디오 경로  
+        mode: 추적 모드 ('auto', 'manual' 등)
+        detection_methods: 사용할 검출 방법 리스트
+        stable_tracker: 위치 기반 안정적 추적기
+        timeline: 검출 타임라인 관리자
+    """
     
     def __init__(self, args):
         self.input_path = args.input
@@ -1249,7 +1387,7 @@ class DualFaceTrackingSystem:
         print(f"🏗️ DualFaceTrackingSystem 초기화 완료")
         print(f"   📥 입력: {self.input_path}")
         print(f"   📤 출력: {self.output_path}")
-        print(f"   🔧 검출 간격: {self.detection_interval}프레임")
+        logger.debug(f"검출 간격: {self.detection_interval}프레임")
         print(f"   📏 크롭 배율: {self.margin_factor}x")
         
     def _initialize_models(self):
@@ -1264,12 +1402,14 @@ class DualFaceTrackingSystem:
                 if model_manager.mtcnn is not None:
                     self.mtcnn = model_manager.mtcnn
                     self.detection_method = "mtcnn_manager"
-                    print("✅ ModelManager MTCNN 모델 로드 완료")
+                    logger.info("ModelManager MTCNN 모델 로드 완료")
                     print(f"   📍 디바이스: {model_manager.device}")
                     print("   🧠 고성능 얼굴 검출 활성화 (MTCNN)")
                     return
+            except (ImportError, ModuleNotFoundError, AttributeError, RuntimeError) as e:
+                logger.warning(f"ModelManager MTCNN 로드 실패: {e}")
             except Exception as e:
-                print(f"⚠️ ModelManager MTCNN 로드 실패: {e}")
+                logger.error(f"예상치 못한 ModelManager 로드 오류: {e}")
         
         # 방법 2: 직접 MTCNN 로드
         try:
@@ -1286,10 +1426,12 @@ class DualFaceTrackingSystem:
                 selection_method='largest_over_threshold'
             )
             self.detection_method = "mtcnn_direct"
-            print("✅ facenet-pytorch MTCNN 직접 로드 완료")
+            logger.info("facenet-pytorch MTCNN 직접 로드 완료")
             return
+        except (ImportError, ModuleNotFoundError, RuntimeError, TypeError) as e:
+            logger.warning(f"직접 MTCNN 로드 실패: {e}")
         except Exception as e:
-            print(f"⚠️ 직접 MTCNN 로드 실패: {e}")
+            logger.error(f"예상치 못한 MTCNN 로드 오류: {e}")
         
         # 방법 3: 기존 프로젝트의 MTCNN 시도 (상위 디렉토리)
         try:
@@ -1301,10 +1443,12 @@ class DualFaceTrackingSystem:
             from face_tracker.core.models import ModelManager
             self.mtcnn, self.resnet = ModelManager.get_models()
             self.detection_method = "mtcnn"
-            print("✅ 상위 프로젝트 MTCNN + FaceNet 모델 로드 완료")
+            logger.info("상위 프로젝트 MTCNN + FaceNet 모델 로드 완료")
             return
+        except (ImportError, ModuleNotFoundError, AttributeError, RuntimeError) as e:
+            logger.warning(f"상위 프로젝트 MTCNN 로드 실패: {e}")
         except Exception as e:
-            print(f"⚠️ 상위 프로젝트 MTCNN 로드 실패: {e}")
+            logger.error(f"예상치 못한 상위 프로젝트 로드 오류: {e}")
         
         # 방법 4: OpenCV Haar Cascade (폴백)
         try:
@@ -1315,17 +1459,19 @@ class DualFaceTrackingSystem:
                 self.face_cascade = cv2.CascadeClassifier(cascade_path)
                 if not self.face_cascade.empty():
                     self.detection_method = "haar"
-                    print(f"✅ OpenCV Haar Cascade 모델 로드 완료 (폴백)")
+                    logger.info("OpenCV Haar Cascade 모델 로드 완료 (폴백)")
                     print(f"   📍 경로: {cascade_path}")
-                    print("   ⚠️ 성능 제한: MTCNN 대신 Haar Cascade 사용")
+                    logger.warning("성능 제한: MTCNN 대신 Haar Cascade 사용")
                     return
                 else:
-                    print(f"⚠️ Haar Cascade 생성 실패: {cascade_path}")
+                    logger.warning(f"Haar Cascade 생성 실패: {cascade_path}")
             else:
-                print(f"⚠️ Haar Cascade 파일 없음: {cascade_path}")
+                logger.warning(f"Haar Cascade 파일 없음: {cascade_path}")
                 
+        except (ImportError, FileNotFoundError, RuntimeError) as e:
+            logger.warning(f"Haar Cascade 로드 실패: {e}")
         except Exception as e:
-            print(f"⚠️ Haar Cascade 로드 실패: {e}")
+            logger.error(f"예상치 못한 Haar Cascade 로드 오류: {e}")
         
         # 방법 5: MediaPipe 얼굴 검출
         try:
@@ -1335,10 +1481,12 @@ class DualFaceTrackingSystem:
             self.face_detection = self.mp_face_detection.FaceDetection(
                 model_selection=1, min_detection_confidence=0.3)
             self.detection_method = "mediapipe"
-            print("✅ MediaPipe 얼굴 검출 모델 로드 완료")
+            logger.info("MediaPipe 얼굴 검출 모델 로드 완료")
             return
+        except (ImportError, ModuleNotFoundError, RuntimeError, AttributeError) as e:
+            logger.warning(f"MediaPipe 로드 실패: {e}")
         except Exception as e:
-            print(f"⚠️ MediaPipe 로드 실패: {e}")
+            logger.error(f"예상치 못한 MediaPipe 로드 오류: {e}")
         
         raise RuntimeError("❌ 모든 얼굴 검출 모델 로드 실패")
     
@@ -1347,7 +1495,7 @@ class DualFaceTrackingSystem:
         print("🧠 FaceNet 모델 초기화 중...")
         
         if not MODEL_MANAGER_AVAILABLE:
-            print("⚠️ ModelManager를 사용할 수 없음. 임베딩 기능 비활성화")
+            logger.warning("ModelManager를 사용할 수 없음. 임베딩 기능 비활성화")
             return
             
         try:
@@ -1363,19 +1511,37 @@ class DualFaceTrackingSystem:
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
             ])
             
-            print("✅ FaceNet 모델 로드 완료")
+            logger.info("FaceNet 모델 로드 완료")
             print(f"   📍 디바이스: {self.model_manager.device}")
             print("   🧠 얼굴 임베딩 기능 활성화")
             
+        except (ImportError, ModuleNotFoundError, RuntimeError, AttributeError) as e:
+            logger.warning(f"FaceNet 모델 초기화 실패: {e}")
+            print("   🔄 임베딩 없이 위치 기반 추적만 사용")
+            self.model_manager = None
         except Exception as e:
-            print(f"⚠️ FaceNet 모델 초기화 실패: {e}")
+            logger.error(f"예상치 못한 FaceNet 초기화 오류: {e}")
             print("   🔄 임베딩 없이 위치 기반 추적만 사용")
             self.model_manager = None
             self.resnet = None
             self.face_transform = None
     
     def generate_face_embedding(self, face_crop: np.ndarray) -> Optional[torch.Tensor]:
-        """얼굴 크롭에서 임베딩 생성"""
+        """
+        얼굴 크롭 이미지에서 FaceNet 임베딩 생성
+        
+        입력된 얼굴 크롭 이미지를 FaceNet 모델에 통과시켜 512차원 임베딩 벡터를 생성합니다.
+        BGR → RGB 변환, 전처리, GPU 이동 등의 과정을 거쳐 최종 임베딩을 반환합니다.
+        
+        Args:
+            face_crop: 얼굴 크롭 이미지 (BGR 형식 numpy 배열)
+            
+        Returns:
+            512차원 임베딩 텐서, 실패시 None
+            
+        Raises:
+            Exception: 임베딩 생성 과정에서 오류 발생시
+        """
         if self.resnet is None or self.face_transform is None:
             return None
             
@@ -1400,17 +1566,28 @@ class DualFaceTrackingSystem:
             return embedding.squeeze(0)  # 배치 차원 제거
             
         except Exception as e:
-            print(f"⚠️ 임베딩 생성 실패: {e}")
+            logger.warning(f"임베딩 생성 실패: {e}")
             return None
     
     def detect_faces(self, frame: np.ndarray) -> List[FaceDetection]:
-        """프레임에서 얼굴 검출"""
+        """
+        프레임에서 얼굴 검출 수행
+        
+        설정된 검출 방법(MTCNN, Haar, DNN, MediaPipe)을 사용하여 얼굴을 검출합니다.
+        검출된 얼굴들은 신뢰도 순으로 정렬되고 최소 크기 필터링을 거칩니다.
+        
+        Args:
+            frame: 입력 프레임 (numpy 배열)
+            
+        Returns:
+            검출된 얼굴 리스트 (FaceDetection 객체들)
+        """
         faces = []
         
         try:
             # 디버깅: 검출 방법 확인
             if not self._debug_detection_logged:
-                print(f"🔧 검출 방법: {self.detection_method}")
+                logger.debug(f"검출 방법: {self.detection_method}")
                 self._debug_detection_logged = True
             
             if self.detection_method == "mtcnn":
@@ -1426,13 +1603,13 @@ class DualFaceTrackingSystem:
             elif self.detection_method == "dnn":
                 faces = self._detect_faces_dnn(frame)
             else:
-                print(f"❌ 알 수 없는 검출 방법: {self.detection_method}")
+                logger.error(f"알 수 없는 검출 방법: {self.detection_method}")
                 return []
             
             # 신뢰도 순으로 정렬 (높은 것부터)
             faces.sort(key=lambda x: x.confidence, reverse=True)
             
-            # Phase 1: 작은 얼굴 필터링 (배경 인물 제거)
+            # 작은 얼굴 필터링 (배경 인물 제거)
             faces = [face for face in faces if face.width >= self.MIN_FACE_SIZE and face.height >= self.MIN_FACE_SIZE]
             
             # 최대 2개까지만 선택
@@ -1452,13 +1629,13 @@ class DualFaceTrackingSystem:
                         face.embedding = embedding
                         
                 except Exception as e:
-                    print(f"⚠️ 얼굴 임베딩 생성 실패: {e}")
+                    logger.warning(f"얼굴 임베딩 생성 실패: {e}")
                     face.embedding = None
             
             return faces
             
         except Exception as e:
-            print(f"⚠️ 얼굴 검출 실패: {e}")
+            logger.warning(f"얼굴 검출 실패: {e}")
             import traceback
             traceback.print_exc()
             return []
@@ -1593,7 +1770,21 @@ class DualFaceTrackingSystem:
         return person1_face, person2_face
 
     def assign_face_ids(self, faces: List[FaceDetection], frame: np.ndarray, frame_idx: int) -> Tuple[Optional[FaceDetection], Optional[FaceDetection]]:
-        """하이브리드 매칭: 임베딩 유사도(70%) + 위치 기반(30%) 할당"""
+        """
+        검출된 얼굴들을 Person1/Person2에 할당
+        
+        하이브리드 매칭 알고리즘을 사용하여 얼굴을 Person1과 Person2에 할당합니다.
+        Reference 임베딩이 있으면 임베딩 유사도(70%) + 위치 기반(30%) 매칭을 사용하고,
+        없으면 위치 기반 추적이나 크기 기반 할당을 사용합니다.
+        
+        Args:
+            faces: 검출된 얼굴 리스트
+            frame: 현재 프레임 이미지
+            frame_idx: 프레임 번호
+            
+        Returns:
+            (Person1 얼굴, Person2 얼굴) 튜플, 없으면 None
+        """
         if len(faces) == 0:
             return None, None
         
@@ -1624,7 +1815,21 @@ class DualFaceTrackingSystem:
         return person1_face, person2_face
     
     def _hybrid_face_matching(self, faces: List[FaceDetection], frame: np.ndarray, frame_idx: int) -> Tuple[Optional[FaceDetection], Optional[FaceDetection]]:
-        """하이브리드 매칭: 임베딩 유사도(90%) + 위치 매칭(10%) - 퀄리티 개선"""
+        """
+        하이브리드 얼굴 매칭 알고리즘
+        
+        임베딩 유사도(90%)와 위치 매칭(10%)을 결합한 고급 매칭 알고리즘입니다.
+        각 검출된 얼굴에 대해 reference 임베딩과의 유사도를 계산하고,
+        위치 정보를 추가로 고려하여 최적의 Person1/Person2 할당을 수행합니다.
+        
+        Args:
+            faces: 검출된 얼굴 리스트
+            frame: 현재 프레임 이미지
+            frame_idx: 프레임 번호
+            
+        Returns:
+            (Person1 얼굴, Person2 얼굴) 튜플
+        """
         import torch.nn.functional as F
         
         if len(faces) == 0:
@@ -1650,7 +1855,7 @@ class DualFaceTrackingSystem:
                         valid_faces.append(face)
             except Exception as e:
                 if self.debug_mode:
-                    print(f"⚠️ 임베딩 추출 실패 (얼굴 {face.center}): {e}")
+                    logger.warning(f"임베딩 추출 실패 (얼굴 {face.center}): {e}")
                 continue
         
         # 임베딩이 없으면 위치 기반 폴백
@@ -1725,15 +1930,27 @@ class DualFaceTrackingSystem:
         if self.debug_mode and frame_idx % 60 == 0:
             p1_status = f"P1=임계값통과" if person1_face else "P1=임계값미달"
             p2_status = f"P2=임계값통과" if person2_face else "P2=임계값미달"
-            print(f"✅ 하이브리드 결과: {p1_status}, {p2_status} (임계값={threshold})")
+            logger.debug(f"하이브리드 결과: {p1_status}, {p2_status} (임계값={threshold})")
         
         return person1_face, person2_face
     
-    # 컴팩트한 크기 기반 시스템으로 교체된 복잡한 로직들은 제거됨
-    
     def create_adaptive_split_screen(self, crop1: np.ndarray, crop2: np.ndarray, 
                                    face1_size: float, face2_size: float) -> Tuple[np.ndarray, float]:
-        """얼굴 크기에 따라 동적으로 스플릿 비율 조정"""
+        """
+        얼굴 크기 기반 적응형 스플릿 스크린 생성
+        
+        두 얼굴의 크기 비율에 따라 스플릿 비율을 동적으로 조정합니다.
+        큰 얼굴에게 더 많은 화면 공간을 할당하여 균형잡힌 출력을 생성합니다.
+        
+        Args:
+            crop1: Person1 크롭 이미지
+            crop2: Person2 크롭 이미지  
+            face1_size: Person1 얼굴 크기
+            face2_size: Person2 얼굴 크기
+            
+        Returns:
+            (합성된 스플릿 스크린, 사용된 스플릿 비율)
+        """
         # 얼굴 크기 비율 계산 (30:70 ~ 70:30 제한)
         total_size = face1_size + face2_size
         if total_size > 0:
@@ -1804,7 +2021,7 @@ class DualFaceTrackingSystem:
     
     def process(self):
         """메인 처리 함수"""
-        print(f"🎬 비디오 처리 시작")
+        logger.info("비디오 처리 시작")
         
         # 🆕 새로운 1단계: 자동 화자 선정 (AutoSpeakerDetector or OneMinuteAnalyzer)
         prescan_profiles = None
@@ -1836,7 +2053,7 @@ class DualFaceTrackingSystem:
                 self.person1_profile = person1_profile
                 self.person2_profile = person2_profile
                 
-                print(f"✅ 1분 집중 분석 완료:")
+                logger.info("1분 집중 분석 완료:")
                 print(f"   Person1: {person1_profile['appearance_count']}개 얼굴, IdentityBank: {person1_profile['identity_bank_size']}개")
                 print(f"   Person2: {person2_profile['appearance_count']}개 얼굴, IdentityBank: {person2_profile['identity_bank_size']}개") 
                 print(f"   위치: P1={prescan_profiles[0]}, P2={prescan_profiles[1]}")
@@ -1865,7 +2082,7 @@ class DualFaceTrackingSystem:
                     speaker2_info['average_position']
                 )
                 
-                print(f"✅ 자동 화자 선정 완료:")
+                logger.info("자동 화자 선정 완료:")
                 print(f"   화자1: {speaker1_info['appearance_count']}회 등장, 점수 {speaker1_info['importance_score']:.3f}")
                 print(f"   화자2: {speaker2_info['appearance_count']}회 등장, 점수 {speaker2_info['importance_score']:.3f}")
                 print(f"   위치: P1={prescan_profiles[0]}, P2={prescan_profiles[1]}")
@@ -1885,7 +2102,7 @@ class DualFaceTrackingSystem:
             
             if prescan_profiles:
                 p1, p2 = prescan_profiles
-                print(f"✅ 타겟 프로파일 확정:")
+                logger.info("타겟 프로파일 확정:")
                 print(f"   Person1: 위치 {p1}")
                 print(f"   Person2: 위치 {p2}")
             else:
@@ -2013,8 +2230,6 @@ class DualFaceTrackingSystem:
                             print(f"     P1 얼굴: center={person1_face.center} conf={person1_face.confidence:.2f}")
                         if person2_face:
                             print(f"     P2 얼굴: center={person2_face.center} conf={person2_face.confidence:.2f}")
-                            
-                        # 기존 초기 위치 기반 코드 제거됨 (크기 기반 시스템에서 불필요)
                     
                     # 검출 기반 업데이트 (트래커 없음)
                     if person1_face:
@@ -2077,7 +2292,7 @@ class DualFaceTrackingSystem:
             print(f"\n🔄 FFmpeg 후처리 시작...")
             success = self._post_process_with_ffmpeg(fps)
             if success:
-                print(f"✅ FFmpeg 후처리 완료!")
+                logger.info("FFmpeg 후처리 완료!")
             else:
                 print(f"⚠️ FFmpeg 후처리 실패, 기본 비디오 유지")
         
@@ -2101,7 +2316,7 @@ class DualFaceTrackingSystem:
             keep_segments = self._calculate_trim_segments(fps)
             
             if not keep_segments:
-                print("⚠️ 유지할 구간이 없음, 후처리 건너뜀")
+                logger.warning("유지할 구간이 없음, 후처리 건너뜀")
                 return False
             
             # 2. 임시 파일 경로 설정
@@ -2136,13 +2351,15 @@ class DualFaceTrackingSystem:
             if success and os.path.exists(temp_video):
                 try:
                     os.remove(temp_video)
-                except:
-                    pass
+                except (OSError, PermissionError, FileNotFoundError) as e:
+                    logger.warning(f"임시 파일 삭제 실패 (무시): {temp_video} - {e}")
+                except Exception as e:
+                    logger.debug(f"예상치 못한 파일 삭제 오류: {e}")
             
             return success
             
         except Exception as e:
-            print(f"❌ FFmpeg 후처리 오류: {e}")
+            logger.error(f"FFmpeg 후처리 오류: {e}")
             return False
     
     def _check_audio_track(self, video_path: str) -> bool:
@@ -2592,15 +2809,15 @@ def main():
     print("=" * 50)
     print(f"   📥 입력: {args.input}")
     print(f"   📤 출력: {args.output}")
-    print(f"   🔧 모드: {args.mode}")
+    logger.debug(f"모드: {args.mode}")
     print(f"   🖥️ GPU: {args.gpu}")
-    print(f"   🔍 디버그: {args.debug}")
+    logger.debug(f"디버그: {args.debug}")
     print(f"   ⚙️ 안정화: {args.size_stabilize}")
-    print(f"   🎯 사전 분석: {args.prescan}")
-    print(f"   ⚡ 빠른 모드: {args.quick}")
+    logger.debug(f"사전 분석: {args.prescan}")
+    logger.debug(f"빠른 모드: {args.quick}")
     print(f"   🤖 자동 화자: {args.auto_speaker}")
-    print(f"   🎯 1분 분석: {args.one_minute}")
-    print(f"   🧮 Hungarian: {args.hungarian}")
+    logger.debug(f"1분 분석: {args.one_minute}")
+    logger.debug(f"Hungarian: {args.hungarian}")
     print("=" * 50)
     print("")
     
@@ -2631,7 +2848,18 @@ def main():
 
 
 class SimpleConsistentTracker:
-    """1분 분석 결과를 바탕으로 단순하고 일관된 추적"""
+    """
+    일관성 기반 단순 추적 클래스
+    
+    1분 분석 결과로 생성된 인물 프로파일을 바탕으로 일관된 추적을 수행합니다.
+    임베딩 기반 매칭과 Identity Bank를 통해 안정적인 인물 식별을 제공합니다.
+    
+    Attributes:
+        p1_profile, p2_profile: Person1/Person2 인물 프로파일
+        identity_bank: 얼굴 임베딩 데이터베이스
+        embedding_threshold: 임베딩 매칭 임계값
+        identity_threshold: Identity Bank 거리 임계값
+    """
     
     def __init__(self, person1_profile: Dict[str, Any], person2_profile: Dict[str, Any], 
                  debug_mode: bool = False, identity_bank=None):
@@ -2822,8 +3050,10 @@ class SimpleConsistentTracker:
                             
                             total_score += similarity * 0.6
                             score_count += 0.6
-                except:
-                    pass  # 임베딩 실패시 무시
+                except (AttributeError, ValueError, TypeError) as e:
+                    logger.debug(f"유사도 계산 실패 (무시): {e}")
+                except Exception as e:
+                    logger.warning(f"예상치 못한 유사도 계산 오류: {e}")
             
             # 2. 크기 일치도 (20% 가중치)
             if profile.get('average_size'):
@@ -2853,7 +3083,7 @@ class SimpleConsistentTracker:
                     best_embedding = face_embedding  # 임베딩도 함께 저장
         
         if self.debug_mode and best_face and best_score > 0.8:  # 고점수일 때만 출력
-            print(f"🎯 좋은 매칭: {profile.get('label', f'P{person_num}')} 점수={best_score:.3f}")
+            logger.debug(f"좋은 매칭: {profile.get('label', f'P{person_num}')} 점수={best_score:.3f}")
         
         return best_face, best_embedding
     
@@ -2868,7 +3098,20 @@ class SimpleConsistentTracker:
 
 
 class HungarianFaceAssigner:
-    """Phase 3: Hungarian Matching을 사용한 A/B 얼굴 할당"""
+    """
+    헝가리안 매칭 기반 얼굴 할당 클래스
+    
+    헝가리안 알고리즘을 사용하여 검출된 얼굴들을 Person1/Person2에 최적으로 할당합니다.
+    임베딩 거리 매트릭스를 기반으로 전역 최적해를 찾아 일관된 할당을 보장합니다.
+    
+    Attributes:
+        identity_bank: 얼굴 임베딩 데이터베이스
+        identity_threshold: Identity Bank 매칭 임계값
+        debug_mode: 디버그 출력 활성화 여부
+    
+    Methods:
+        assign_faces: 헝가리안 알고리즘으로 얼굴 할당 수행
+    """
     
     def __init__(self, identity_bank, debug_mode: bool = False):
         """

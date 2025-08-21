@@ -21,6 +21,11 @@ from pathlib import Path
 from PIL import Image
 from torchvision import transforms
 import time
+import logging
+from ..utils.logger import get_logger
+
+# Logger 설정
+logger = get_logger(__name__, level=logging.INFO)
 
 # 클러스터링 라이브러리
 try:
@@ -28,7 +33,7 @@ try:
     from sklearn.metrics.pairwise import cosine_similarity
     CLUSTERING_AVAILABLE = True
 except ImportError:
-    print("⚠️ scikit-learn 없음. 기본 클러스터링 사용")
+    logger.warning("scikit-learn 없음. 기본 클러스터링 사용")
     CLUSTERING_AVAILABLE = False
 
 # Dual 시스템 전용 모델 import - models.py 삭제됨
@@ -139,7 +144,7 @@ class AutoSpeakerDetector:
             self.face_cascade = cv2.CascadeClassifier(cascade_path)
             if not self.face_cascade.empty():
                 if self.debug_mode:
-                    print("✅ Haar Cascade 얼굴 검출기 로드 완료")
+                    logger.info("Haar Cascade 얼굴 검출기 로드 완료")
             else:
                 raise RuntimeError("❌ Haar Cascade 로드 실패")
         else:
@@ -149,7 +154,7 @@ class AutoSpeakerDetector:
         """FaceNet 모델 초기화"""
         if not MODEL_MANAGER_AVAILABLE:
             if self.debug_mode:
-                print("⚠️ ModelManager 없음. 임베딩 기능 비활성화")
+                logger.warning("ModelManager 없음. 임베딩 기능 비활성화")
             return
             
         try:
@@ -165,11 +170,16 @@ class AutoSpeakerDetector:
             ])
             
             if self.debug_mode:
-                print(f"✅ FaceNet 모델 로드 완료 (디바이스: {device})")
+                logger.info(f"FaceNet 모델 로드 완료 (디바이스: {device})")
                 
-        except Exception as e:
+        except (ImportError, ModuleNotFoundError, RuntimeError, AttributeError) as e:
             if self.debug_mode:
-                print(f"⚠️ FaceNet 초기화 실패: {e}")
+                logger.warning(f"FaceNet 초기화 실패: {e}")
+            self.model_manager = None
+            self.resnet = None
+            self.face_transform = None
+        except Exception as e:
+            logger.error(f"예상치 못한 FaceNet 초기화 오류: {e}")
             self.model_manager = None
             self.resnet = None
             self.face_transform = None
@@ -206,15 +216,18 @@ class AutoSpeakerDetector:
             
             return embedding.squeeze(0).cpu()  # CPU로 이동 후 배치 차원 제거
             
-        except Exception as e:
+        except (RuntimeError, ValueError, AttributeError, TypeError) as e:
             if self.debug_mode:
-                print(f"⚠️ 임베딩 추출 실패: {e}")
+                logger.warning(f"임베딩 추출 실패: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"예상치 못한 임베딩 추출 오류: {e}")
             return None
     
     def scan_video(self, video_path: str) -> List[Dict[str, Any]]:
         """전체 영상 스캔하여 모든 얼굴 검출 데이터 수집"""
-        print(f"🔍 자동 화자 분석 시작: {video_path}")
-        print(f"   📊 샘플링 비율: {self.sample_rate:.1%}")
+        logger.info(f"자동 화자 분석 시작: {video_path}")
+        logger.debug(f"샘플링 비율: {self.sample_rate:.1%}")
         
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -225,7 +238,7 @@ class AutoSpeakerDetector:
         sample_interval = int(1 / self.sample_rate)
         
         print(f"   📹 총 {total_frames}프레임, {total_frames/fps:.1f}초")
-        print(f"   🎯 분석할 프레임: {total_frames//sample_interval}개")
+        logger.debug(f"분석할 프레임: {total_frames//sample_interval}개")
         
         all_detections = []
         frame_idx = 0
@@ -269,20 +282,20 @@ class AutoSpeakerDetector:
                 if frame_idx % (sample_interval * 50) == 0:  # 50개 샘플마다
                     progress = (frame_idx / total_frames) * 100
                     elapsed = time.time() - start_time
-                    print(f"   📊 진행률: {progress:.1f}% ({len(all_detections)}개 얼굴, {elapsed:.1f}초)")
+                    logger.debug(f"진행률: {progress:.1f}% ({len(all_detections)}개 얼굴, {elapsed:.1f}초)")
         
         finally:
             cap.release()
         
         elapsed_time = time.time() - start_time
-        print(f"✅ 스캔 완료: {len(all_detections)}개 얼굴 발견 ({elapsed_time:.1f}초)")
+        logger.info(f"스캔 완료: {len(all_detections)}개 얼굴 발견 ({elapsed_time:.1f}초)")
         
         return all_detections
     
     def scan_video_left_right(self, video_path: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """좌우 영역별로 분리하여 전체 영상 스캔"""
-        print(f"🔍 좌우 분리 화자 분석 시작: {video_path}")
-        print(f"   📊 샘플링 비율: {self.sample_rate:.1%}")
+        logger.info(f"좌우 분리 화자 분석 시작: {video_path}")
+        logger.debug(f"샘플링 비율: {self.sample_rate:.1%}")
         
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -293,7 +306,7 @@ class AutoSpeakerDetector:
         sample_interval = int(1 / self.sample_rate)
         
         print(f"   📹 총 {total_frames}프레임, {total_frames/fps:.1f}초")
-        print(f"   🎯 분석할 프레임: {total_frames//sample_interval}개")
+        logger.debug(f"분석할 프레임: {total_frames//sample_interval}개")
         print(f"   ⚖️ 좌우 분리 기준: x=960px")
         
         left_detections = []   # x < 960 (왼쪽 영역)
@@ -343,13 +356,13 @@ class AutoSpeakerDetector:
                 if frame_idx % (sample_interval * 50) == 0:  # 50개 샘플마다
                     progress = (frame_idx / total_frames) * 100
                     elapsed = time.time() - start_time
-                    print(f"   📊 진행률: {progress:.1f}% (좌:{len(left_detections)}개, 우:{len(right_detections)}개, {elapsed:.1f}초)")
+                    logger.debug(f"진행률: {progress:.1f}% (좌:{len(left_detections)}개, 우:{len(right_detections)}개, {elapsed:.1f}초)")
         
         finally:
             cap.release()
         
         elapsed = time.time() - start_time
-        print(f"✅ 좌우 분리 스캔 완료: 좌측 {len(left_detections)}개, 우측 {len(right_detections)}개 ({elapsed:.1f}초)")
+        logger.info(f"좌우 분리 스캔 완료: 좌측 {len(left_detections)}개, 우측 {len(right_detections)}개 ({elapsed:.1f}초)")
         
         return left_detections, right_detections
     
@@ -383,7 +396,7 @@ class AutoSpeakerDetector:
                         return faces
             except Exception as e:
                 if self.debug_mode:
-                    print(f"⚠️ MTCNN 얼굴 검출 실패, Haar Cascade 폴백: {e}")
+                    logger.warning(f"MTCNN 얼굴 검출 실패, Haar Cascade 폴백: {e}")
         
         # 2. Haar Cascade 폴백
         try:
@@ -406,7 +419,7 @@ class AutoSpeakerDetector:
                         faces.append((bbox, confidence))
         except Exception as e:
             if self.debug_mode:
-                print(f"⚠️ Haar Cascade 얼굴 검출 실패: {e}")
+                logger.warning(f"Haar Cascade 얼굴 검출 실패: {e}")
         
         return faces
     
@@ -418,7 +431,7 @@ class AutoSpeakerDetector:
         valid_detections = [det for det in all_detections if det['embedding'] is not None]
         
         if len(valid_detections) < self.min_cluster_size:
-            print(f"⚠️ 충분한 임베딩 데이터 없음 ({len(valid_detections)}개 < {self.min_cluster_size}개)")
+            logger.warning(f"충분한 임베딩 데이터 없음 ({len(valid_detections)}개 < {self.min_cluster_size}개)")
             return self._fallback_clustering(all_detections)
         
         # 임베딩 스택
@@ -465,7 +478,7 @@ class AutoSpeakerDetector:
         # 동일 인물 클러스터 병합 (중복 방지)
         merged_clusters = self.merge_similar_clusters(filtered_clusters)
         
-        print(f"✅ 클러스터링 완료: {len(merged_clusters)}개 클러스터 생성 (병합 후)")
+        logger.info(f"클러스터링 완료: {len(merged_clusters)}개 클러스터 생성 (병합 후)")
         
         return merged_clusters
     
@@ -474,7 +487,7 @@ class AutoSpeakerDetector:
         print(f"🔄 단일 클러스터 분할 시도 ({len(cluster.detections)}개 검출)")
         
         if len(cluster.detections) < 10:
-            print(f"❌ 검출 수가 너무 적음 ({len(cluster.detections)}개)")
+            logger.error(f"검출 수가 너무 적음 ({len(cluster.detections)}개)")
             return None, None
         
         # 크기 기준으로 정렬 (큰 얼굴 vs 작은 얼굴)
@@ -501,7 +514,7 @@ class AutoSpeakerDetector:
         cluster1.importance_score = self.calculate_importance_score(cluster1, video_duration)
         cluster2.importance_score = self.calculate_importance_score(cluster2, video_duration)
         
-        print(f"✅ 클러스터 분할 완료: {len(cluster1.detections)}개 + {len(cluster2.detections)}개")
+        logger.info(f"클러스터 분할 완료: {len(cluster1.detections)}개 + {len(cluster2.detections)}개")
         
         # 화자 정보 생성
         speaker1_info = {
@@ -604,16 +617,16 @@ class AutoSpeakerDetector:
                     merged.append(merged_cluster)
                     
                     if self.debug_mode:
-                        print(f"   ✅ {len(merge_candidates)}개 클러스터 병합 완료 (남은 클러스터: {remaining_clusters}개)")
+                        logger.info(f"{len(merge_candidates)}개 클러스터 병합 완료 (남은 클러스터: {remaining_clusters}개)")
                 else:
                     # 병합하면 1개만 남으면 병합 취소
                     merged.append(cluster1)
                     if self.debug_mode:
-                        print(f"   ⚠️ 병합 취소 (최소 2개 클러스터 유지를 위해)")
+                        logger.warning("병합 취소 (최소 2개 클러스터 유지를 위해)")
             else:
                 merged.append(cluster1)
         
-        print(f"✅ 클러스터 병합 완료: {len(clusters)}개 → {len(merged)}개")
+        logger.info(f"클러스터 병합 완료: {len(clusters)}개 → {len(merged)}개")
         return merged
     
     def _merge_clusters(self, clusters: List[FaceCluster]) -> FaceCluster:
@@ -640,7 +653,7 @@ class AutoSpeakerDetector:
     
     def _fallback_clustering(self, all_detections: List[Dict[str, Any]]) -> List[FaceCluster]:
         """임베딩 없을 때 위치 기반 폴백 클러스터링"""
-        print("⚠️ 위치 기반 폴백 클러스터링 사용")
+        logger.warning("위치 기반 폴백 클러스터링 사용")
         
         if len(all_detections) < 10:
             return []
@@ -722,10 +735,10 @@ class AutoSpeakerDetector:
     
     def select_main_speakers(self, clusters: List[FaceCluster], video_duration: float) -> Tuple[Optional[FaceCluster], Optional[FaceCluster]]:
         """주요 화자 2명 선정"""
-        print(f"🎯 주요 화자 선정 중...")
+        logger.debug("주요 화자 선정 중...")
         
         if len(clusters) < 2:
-            print(f"⚠️ 충분한 클러스터 없음 ({len(clusters)}개)")
+            logger.warning(f"충분한 클러스터 없음 ({len(clusters)}개)")
             return None, None
         
         # 각 클러스터의 중요도 점수 계산
@@ -740,7 +753,7 @@ class AutoSpeakerDetector:
         
         # 결과 출력
         if self.debug_mode:
-            print(f"✅ 주요 화자 자동 선정 완료:")
+            logger.info("주요 화자 자동 선정 완료:")
             for i, speaker in enumerate([speaker1, speaker2], 1):
                 stats = speaker.get_stats()
                 print(f"   화자{i}: {stats['appearance_count']}회 등장, "
@@ -754,7 +767,7 @@ class AutoSpeakerDetector:
         start_time = time.time()
         
         print("\n" + "=" * 60)
-        print("🎯 좌우 기반 화자 분석 시작")
+        logger.debug("좌우 기반 화자 분석 시작")
         print("=" * 60)
         
         # 1단계: 좌우 분리 스캔
@@ -767,7 +780,7 @@ class AutoSpeakerDetector:
         video_duration = total_frames / fps
         cap.release()
         
-        print(f"\n📊 좌우 분리 결과:")
+        logger.debug("좌우 분리 결과:")
         print(f"   왼쪽 영역: {len(left_detections)}개 얼굴")
         print(f"   오른쪽 영역: {len(right_detections)}개 얼굴")
         
@@ -787,11 +800,11 @@ class AutoSpeakerDetector:
                 main_left_cluster.importance_score = self.calculate_importance_score(main_left_cluster, video_duration)
                 
                 speaker1_info = self._create_speaker_info(main_left_cluster, "Person1 (Left)")
-                print(f"✅ Person1 선정: {len(main_left_cluster.detections)}개 검출, 점수 {main_left_cluster.importance_score:.3f}")
+                logger.info(f"Person1 선정: {len(main_left_cluster.detections)}개 검출, 점수 {main_left_cluster.importance_score:.3f}")
             else:
-                print(f"❌ 왼쪽 영역 클러스터링 실패")
+                logger.error("왼쪽 영역 클러스터링 실패")
         else:
-            print(f"⚠️ 왼쪽 영역 데이터 부족: {len(left_detections)}개 < {self.min_cluster_size}개")
+            logger.warning(f"왼쪽 영역 데이터 부족: {len(left_detections)}개 < {self.min_cluster_size}개")
         
         # 오른쪽 영역에서 주요 화자 선정 (Person2)
         if len(right_detections) >= self.min_cluster_size:
@@ -805,24 +818,24 @@ class AutoSpeakerDetector:
                 main_right_cluster.importance_score = self.calculate_importance_score(main_right_cluster, video_duration)
                 
                 speaker2_info = self._create_speaker_info(main_right_cluster, "Person2 (Right)")
-                print(f"✅ Person2 선정: {len(main_right_cluster.detections)}개 검출, 점수 {main_right_cluster.importance_score:.3f}")
+                logger.info(f"Person2 선정: {len(main_right_cluster.detections)}개 검출, 점수 {main_right_cluster.importance_score:.3f}")
             else:
-                print(f"❌ 오른쪽 영역 클러스터링 실패")
+                logger.error("오른쪽 영역 클러스터링 실패")
         else:
-            print(f"⚠️ 오른쪽 영역 데이터 부족: {len(right_detections)}개 < {self.min_cluster_size}개")
+            logger.warning(f"오른쪽 영역 데이터 부족: {len(right_detections)}개 < {self.min_cluster_size}개")
         
         # 3단계: 결과 검증 및 반환
         elapsed_time = time.time() - start_time
         print(f"\n🎉 좌우 기반 분석 완료 ({elapsed_time:.1f}초)")
         
         if speaker1_info and speaker2_info:
-            print(f"✅ 양쪽 화자 모두 선정 성공")
+            logger.info("양쪽 화자 모두 선정 성공")
             return speaker1_info, speaker2_info
         elif speaker1_info or speaker2_info:
-            print(f"⚠️ 한쪽 화자만 선정됨")
+            logger.warning("한쪽 화자만 선정됨")
             return speaker1_info, speaker2_info
         else:
-            print(f"❌ 화자 선정 실패")
+            logger.error("화자 선정 실패")
             return None, None
     
     def _create_speaker_info(self, cluster: FaceCluster, label: str = "") -> Dict[str, Any]:
@@ -884,7 +897,7 @@ class OneMinuteAnalyzer:
             self.face_cascade = cv2.CascadeClassifier(cascade_path)
             if not self.face_cascade.empty():
                 if self.debug_mode:
-                    print("✅ Haar Cascade 얼굴 검출기 로드 완료")
+                    logger.info("Haar Cascade 얼굴 검출기 로드 완료")
             else:
                 raise RuntimeError("❌ Haar Cascade 로드 실패")
         else:
@@ -895,10 +908,10 @@ class OneMinuteAnalyzer:
             from .model_manager import ModelManager
             self.model_manager = ModelManager()
             if self.debug_mode:
-                print("✅ ModelManager 로드 완료 (MTCNN 사용 가능)")
+                logger.info("ModelManager 로드 완료 (MTCNN 사용 가능)")
         except ImportError:
             if self.debug_mode:
-                print("⚠️ ModelManager 없음 (Haar Cascade만 사용)")
+                logger.warning("ModelManager 없음 (Haar Cascade만 사용)")
     
     def _initialize_facenet(self):
         """FaceNet 모델 초기화 (AutoSpeakerDetector와 동일)"""
@@ -919,18 +932,18 @@ class OneMinuteAnalyzer:
             ])
             
             if self.debug_mode:
-                print("✅ FaceNet 모델 로드 완료")
+                logger.info("FaceNet 모델 로드 완료")
                 
         except ImportError as e:
             if self.debug_mode:
-                print(f"⚠️ FaceNet 로드 실패: {e}")
+                logger.warning(f"FaceNet 로드 실패: {e}")
             self.resnet = None
             self.face_transform = None
 
     def analyze_first_minute(self, video_path: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """처음 1분을 100% 분석하여 확실한 화자 프로파일 생성"""
         print("\n" + "=" * 70)
-        print("🎯 1분 집중 분석 시작")
+        logger.debug("1분 집중 분석 시작")
         print("=" * 70)
         
         cap = cv2.VideoCapture(video_path)
@@ -942,7 +955,7 @@ class OneMinuteAnalyzer:
         analyze_frames = min(int(fps * 60), total_frames)  # 60초 또는 전체 프레임 중 적은 것
         
         print(f"📹 비디오 정보: {total_frames}프레임, {total_frames/fps:.1f}초, {fps:.1f}fps")
-        print(f"🎯 분석 범위: 처음 {analyze_frames}프레임 (60초)")
+        logger.debug(f"분석 범위: 처음 {analyze_frames}프레임 (60초)")
         print(f"⚖️ 좌우 분리 기준: x=960px")
         
         left_face_data = []   # 왼쪽 영역 모든 얼굴
@@ -989,13 +1002,13 @@ class OneMinuteAnalyzer:
                 if frame_idx % 300 == 0:  # 10초마다
                     progress = (frame_idx / analyze_frames) * 100
                     elapsed = time.time() - start_time
-                    print(f"   📊 진행률: {progress:.1f}% (좌:{len(left_face_data)}, 우:{len(right_face_data)}, {elapsed:.1f}초)")
+                    logger.debug(f"진행률: {progress:.1f}% (좌:{len(left_face_data)}, 우:{len(right_face_data)}, {elapsed:.1f}초)")
         
         finally:
             cap.release()
         
         elapsed = time.time() - start_time
-        print(f"✅ 1분 스캔 완료: 좌측 {len(left_face_data)}개, 우측 {len(right_face_data)}개 ({elapsed:.1f}초)")
+        logger.info(f"1분 스캔 완료: 좌측 {len(left_face_data)}개, 우측 {len(right_face_data)}개 ({elapsed:.1f}초)")
         
         # 각 영역에서 화자 프로파일 생성
         person1_profile = self._create_speaker_profile(left_face_data, "Person1 (Left)")
@@ -1035,9 +1048,12 @@ class OneMinuteAnalyzer:
             
             return embedding.squeeze(0).cpu()  # CPU로 이동 후 배치 차원 제거
             
-        except Exception as e:
+        except (RuntimeError, ValueError, AttributeError, TypeError) as e:
             if self.debug_mode:
-                print(f"⚠️ 임베딩 추출 실패: {e}")
+                logger.warning(f"임베딩 추출 실패: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"예상치 못한 임베딩 추출 오류: {e}")
             return None
 
     def _detect_faces_in_frame(self, frame: np.ndarray) -> List[Tuple[Tuple[int, int, int, int], float]]:
@@ -1070,7 +1086,7 @@ class OneMinuteAnalyzer:
                         return faces
             except Exception as e:
                 if self.debug_mode:
-                    print(f"⚠️ MTCNN 얼굴 검출 실패, Haar Cascade 폴백: {e}")
+                    logger.warning(f"MTCNN 얼굴 검출 실패, Haar Cascade 폴백: {e}")
         
         # 2. Haar Cascade 폴백
         try:
@@ -1086,7 +1102,7 @@ class OneMinuteAnalyzer:
                 
         except Exception as e:
             if self.debug_mode:
-                print(f"⚠️ Haar Cascade 얼굴 검출 실패: {e}")
+                logger.warning(f"Haar Cascade 얼굴 검출 실패: {e}")
         
         return faces
 
@@ -1095,14 +1111,14 @@ class OneMinuteAnalyzer:
         print(f"\n🔄 {label} 프로파일 생성 중...")
         
         if len(face_data) < self.min_cluster_size:
-            print(f"❌ {label} 데이터 부족: {len(face_data)}개 < {self.min_cluster_size}개")
+            logger.error(f"{label} 데이터 부족: {len(face_data)}개 < {self.min_cluster_size}개")
             return None
         
         # 임베딩이 있는 데이터만 필터링
         valid_data = [f for f in face_data if f['embedding'] is not None]
         
         if len(valid_data) < self.min_cluster_size:
-            print(f"❌ {label} 유효 임베딩 부족: {len(valid_data)}개 < {self.min_cluster_size}개")
+            logger.error(f"{label} 유효 임베딩 부족: {len(valid_data)}개 < {self.min_cluster_size}개")
             return None
         
         # DBSCAN 클러스터링으로 같은 사람끼리 그룹화
@@ -1133,16 +1149,16 @@ class OneMinuteAnalyzer:
             valid_labels = [(label, count) for label, count in label_counts.items() if label != -1]
             
             if not valid_labels:
-                print(f"❌ {label} 유효 클러스터 없음")
+                logger.error(f"{label} 유효 클러스터 없음")
                 return None
             
             main_cluster_label = max(valid_labels, key=lambda x: x[1])[0]
             main_faces = [valid_data[i] for i, l in enumerate(cluster_labels) if l == main_cluster_label]
             
-            print(f"✅ {label} 클러스터링 완료: {len(main_faces)}개 검출 (전체 {len(cluster_labels)}개 중)")
+            logger.info(f"{label} 클러스터링 완료: {len(main_faces)}개 검출 (전체 {len(cluster_labels)}개 중)")
             
         except Exception as e:
-            print(f"⚠️ {label} 클러스터링 실패, 전체 데이터 사용: {e}")
+            logger.warning(f"{label} 클러스터링 실패, 전체 데이터 사용: {e}")
             main_faces = valid_data
         
         # Phase 2: IdentityBank를 사용한 강력한 프로파일 생성
@@ -1195,7 +1211,7 @@ class OneMinuteAnalyzer:
             print(f"   - 평균 위치: ({profile['average_position'][0]:.0f}, {profile['average_position'][1]:.0f})")
             print(f"   - X 범위: {profile['position_range']['x_min']:.0f} ~ {profile['position_range']['x_max']:.0f}")
             print(f"   - Y 범위: {profile['position_range']['y_min']:.0f} ~ {profile['position_range']['y_max']:.0f}")
-            print(f"   - 프로토타입: {'✅ 생성됨' if prototype_embedding is not None else '❌ 없음'}")
+            logger.info(f"{label} 프로토타입: {'✅ 생성됨' if prototype_embedding is not None else '❌ 없음'}")
         
         return profile
 
@@ -1211,11 +1227,11 @@ if __name__ == "__main__":
         
         if speaker1 and speaker2:
             print("\n" + "="*50)
-            print("🎯 자동 화자 선정 결과")
+            logger.info("자동 화자 선정 결과")
             print("="*50)
             print(f"화자1: {speaker1['appearance_count']}회 등장, 점수 {speaker1['importance_score']:.3f}")
             print(f"화자2: {speaker2['appearance_count']}회 등장, 점수 {speaker2['importance_score']:.3f}")
         else:
             print("❌ 화자 선정 실패")
     else:
-        print(f"⚠️ 테스트 비디오 없음: {video_path}")
+        logger.warning(f"테스트 비디오 없음: {video_path}")

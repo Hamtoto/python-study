@@ -10,6 +10,10 @@ from facenet_pytorch import MTCNN, InceptionResnetV1
 import numpy as np
 from typing import List, Optional, Tuple, Union
 import logging
+from ..utils.logger import get_logger
+
+# Logger 설정
+logger = get_logger(__name__, level=logging.INFO)
 
 class ModelManager:
     """
@@ -300,14 +304,14 @@ def get_model_manager() -> ModelManager:
 
 if __name__ == "__main__":
     # 테스트 코드
-    print("🧪 ModelManager 테스트")
+    logger.info("ModelManager 테스트")
     
     manager = ModelManager()
     info = manager.get_model_info()
     
-    print(f"Device: {info['device']}")
-    print(f"MTCNN: {info['mtcnn_loaded']}")
-    print(f"FaceNet: {info['facenet_loaded']}")
-    print(f"CUDA: {info['cuda_available']}")
+    logger.info(f"Device: {info['device']}")
+    logger.info(f"MTCNN: {info['mtcnn_loaded']}")
+    logger.info(f"FaceNet: {info['facenet_loaded']}")
+    logger.info(f"CUDA: {info['cuda_available']}")
     
-    print("✅ ModelManager 테스트 완료")
+    logger.info("ModelManager 테스트 완료")
