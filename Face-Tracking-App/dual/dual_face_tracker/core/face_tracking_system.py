@@ -44,8 +44,29 @@ class TqdmLoggingHandler(logging.Handler):
         except:
             self.handleError(record)
 
-# 로거 초기화
-logger = get_logger(__name__, level=logging.INFO)
+# 로거 초기화 (tqdm 호환성을 위해 TqdmLoggingHandler 사용)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# 기존 핸들러 제거 (중복 방지)
+if logger.handlers:
+    logger.handlers.clear()
+
+# TqdmLoggingHandler 사용 (콘솔 출력)
+tqdm_handler = TqdmLoggingHandler()
+tqdm_handler.setLevel(logging.INFO)
+tqdm_formatter = logging.Formatter(
+    '%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+tqdm_handler.setFormatter(tqdm_formatter)
+logger.addHandler(tqdm_handler)
+
+# 파일 핸들러 추가
+file_handler = logging.FileHandler('dual_face_tracker.log', encoding='utf-8')
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(tqdm_formatter)
+logger.addHandler(file_handler)
 
 # AutoSpeakerDetector import
 from .auto_speaker_detector import AutoSpeakerDetector
